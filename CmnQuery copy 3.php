@@ -55,7 +55,7 @@ class CmnQuery
                     ON cc.SEC_EJEC=D.SEC_EJEC AND cc.ANO_EJE=D.ANNO_EJEC
                    AND cc.CENTRO_COSTO=D.CENTRO_COSTO
              WHERE  D.ANNO_PROG=? AND D.ANNO_EJEC=? AND D.SEC_EJEC=?
-               AND  ISNULL(D.ESTADO,'') NOT IN ('E','ET')
+               AND  D.ESTADO NOT IN ('E','ET')
              ORDER BY D.CENTRO_COSTO"
         );
         $st->execute([$anioProg, $anioEjec, $secEjec]);
@@ -83,24 +83,25 @@ class CmnQuery
             D.GRUPO_BIEN, D.CLASE_BIEN, D.FAMILIA_BIEN, D.ITEM_BIEN,
             cat.NOMBRE_ITEM                                         AS NOMBRE_ITEM,
             um.NOMBRE                                               AS UNIDAD_MEDIDA,
-            /* PROGRAMADO = solo lo APROBADO en el cuadro de necesidades. Ítems añadidos
-               después por modificación (estado I/IT) no existen en la necesidad =>
-               programado 0 (así cuadra con la Fase Consolidación y Aprobación del SIGA,
-               y la fase los clasifica como MODIFICADO). Servicios: 1 × importe. */
-            CASE WHEN D.TIPO_BIEN='S'
-                 THEN CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0 THEN 1 ELSE 0 END
-                 ELSE ISNULL(ori.CANT_TOTAL, 0) END                 AS CANTIDAD_PROG,
-            CASE WHEN D.TIPO_BIEN='S' THEN ISNULL(ori.MNTO_TOTAL, 0)
-                 ELSE ISNULL(ori.PRECIO_UNIT, 0) END                AS PRECIO_UNIT_PROG,
-            ISNULL(ori.MNTO_TOTAL, 0)                               AS IMPORTE_PROG,
+            CASE WHEN D.TIPO_BIEN='S' THEN 1
+                 ELSE ISNULL(ori.CANT_TOTAL,  D.CANT_TOTAL) END     AS CANTIDAD_PROG,
+            CASE WHEN D.TIPO_BIEN='S' THEN ISNULL(ori.MNTO_TOTAL, D.MNTO_TOTAL)
+                 ELSE ISNULL(ori.PRECIO_UNIT, D.PRECIO_UNIT) END    AS PRECIO_UNIT_PROG,
+            ISNULL(ori.MNTO_TOTAL,  D.MNTO_TOTAL)                  AS IMPORTE_PROG,
             CASE WHEN D.TIPO_BIEN='S' THEN 1 ELSE D.CANT_TOTAL END  AS CANTIDAD_MOD,
-            /* MODIFICADO VIGENTE: fiel al CMN del SIGA (suma de sus líneas I + base).
-               El precio real del consolidado PAAC NO altera esta columna; queda como
-               trazabilidad en el historial (sección Consolidado) para explicar las
-               diferencias de precio. Servicios: 1 × importe. */
-            CASE WHEN D.TIPO_BIEN='S' THEN D.MNTO_TOTAL
-                 ELSE D.PRECIO_UNIT END                             AS PRECIO_UNIT_MOD,
-            D.MNTO_TOTAL                                            AS IMPORTE_MOD,
+            /* MODIFICADO VIGENTE: si la línea fue consolidada (PAAC), se valoriza con el
+               precio DOCUMENTADO del consolidado (SIG_PAAC_ITEM.PRECIO_UNIT, con su
+               FECHA_PRECIO), que es el precio real fijado al consolidar/certificar.
+               Trazabilidad: CMN linea (SEC_CUA_MOD_SAL) -> SIG_CUADRO_MODIFICADO_CMN
+               -> consolidado PAAC -> SIG_PAAC_ITEM. Si no hay consolidado, queda el CMN.
+               En SERVICIOS el precio mostrado es el importe (cantidad normalizada a 1). */
+            CASE WHEN D.TIPO_BIEN='S'
+                 THEN CASE WHEN paac.PRECIO_UNIT IS NOT NULL
+                           THEN D.CANT_TOTAL * paac.PRECIO_UNIT ELSE D.MNTO_TOTAL END
+                 ELSE ISNULL(paac.PRECIO_UNIT, D.PRECIO_UNIT) END   AS PRECIO_UNIT_MOD,
+            CASE WHEN paac.PRECIO_UNIT IS NOT NULL
+                 THEN D.CANT_TOTAL * paac.PRECIO_UNIT
+                 ELSE D.MNTO_TOTAL END                              AS IMPORTE_MOD,
             COALESCE(ej.ORDENES,
                      CASE WHEN cert.NRO_CERTIFICA IS NOT NULL
                           THEN 'CERTIFICADO · Cert ' + CONVERT(VARCHAR, cert.NRO_CERTIFICA)
@@ -113,7 +114,10 @@ class CmnQuery
                  WHEN ISNULL(dev.CANT_DEV,0) > 0 THEN dev.MNTO_DEV / dev.CANT_DEV
                  ELSE 0 END                                         AS PRECIO_UNIT_EJEC,
             ISNULL(dev.MNTO_DEV, 0)                                 AS IMPORTE_EJEC,
-            D.MNTO_TOTAL - ISNULL(dev.MNTO_DEV, 0)                  AS DIFERENCIA
+            (CASE WHEN paac.PRECIO_UNIT IS NOT NULL
+                  THEN D.CANT_TOTAL * paac.PRECIO_UNIT
+                  ELSE D.MNTO_TOTAL END)
+            - ISNULL(dev.MNTO_DEV, 0)                               AS DIFERENCIA
         FROM (
             /* LÍNEAS DEL CMN AGRUPADAS por centro + meta + tarea + clasificador + ítem.
                El SIGA permite VARIAS líneas del mismo ítem en un centro (p.ej. tres
@@ -135,7 +139,7 @@ class CmnQuery
               AND  ANNO_EJEC = :anioEjec
               AND  SEC_EJEC  = :secEjec
               {$filtroCC}
-              AND  ISNULL(ESTADO,'') NOT IN ('E','ET')
+              AND  ESTADO NOT IN ('E','ET')
             GROUP BY SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                      SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                      GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN, UNIDAD_MEDIDA
@@ -177,6 +181,24 @@ class CmnQuery
               AND  ISNULL(c.ANULADO,0)=0
             ORDER BY cp.NRO_CERTIFICA DESC
         ) cert
+        OUTER APPLY (
+            /* PRECIO DOCUMENTADO DEL CONSOLIDADO PAAC para esta línea del CMN.
+               Puente: D.SEC_CUA_MOD_SAL -> SIG_CUADRO_MODIFICADO_CMN -> SIG_PAAC_ITEM.
+               Si la línea se consolidó más de una vez, se toma el precio más reciente
+               (FECHA_PRECIO). El match por código de ítem es de seguridad. */
+            SELECT TOP 1 pi.PRECIO_UNIT, pi.FECHA_PRECIO, cmn.NRO_CONSOLID
+            FROM   SIG_CUADRO_MODIFICADO_CMN cmn
+            JOIN   SIG_PAAC_ITEM pi
+                   ON pi.SEC_EJEC=cmn.SEC_EJEC AND pi.ANO_EJE=cmn.ANNO_EJEC
+                  AND pi.TIPO_CONSOLID=cmn.TIPO_CONSOLID AND pi.NRO_CONSOLID=cmn.NRO_CONSOLID
+                  AND pi.TIPO_GENERACION=cmn.TIPO_GENERACION AND pi.TIPO_BIEN=cmn.TIPO_BIEN
+                  AND pi.SEC_CONSOLID=cmn.SEC_CONSOLID AND pi.SEC_RESUMEN=cmn.SEC_RESUMEN
+            WHERE  cmn.SEC_EJEC=D.SEC_EJEC AND cmn.ANNO_EJEC=D.ANNO_EJEC
+              AND  cmn.SEC_CUA_MOD_SAL=D.SEC_CUA_MOD_SAL
+              AND  pi.GRUPO_BIEN=D.GRUPO_BIEN AND pi.CLASE_BIEN=D.CLASE_BIEN
+              AND  pi.FAMILIA_BIEN=D.FAMILIA_BIEN AND pi.ITEM_BIEN=D.ITEM_BIEN
+            ORDER BY pi.FECHA_PRECIO DESC
+        ) paac
         LEFT JOIN (
             /* LISTA DE ÓRDENES POR META + CLASIFICADOR + ITEM (para el detalle/estado).
                Antes se listaba por item a secas -> aparecían órdenes de otras metas.
