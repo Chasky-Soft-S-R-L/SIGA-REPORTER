@@ -9,6 +9,8 @@
  * DIFERENCIA = saldo por ejecutar (negativo = sobre-ejecución).
  *
  * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
+ * LOADER: escarapela del Perú girando (CSS puro), con barra superior y
+ * retardo de 250 ms para no parpadear cuando la caché responde al instante.
  */
 
 require_once __DIR__ . '/config.php';
@@ -106,6 +108,90 @@ include __DIR__ . '/partials/head.php';
   </main>
 </div>
 
+<!-- ══════════ LOADER · Escarapela del Perú ══════════ -->
+<div id="loadBar"><span></span></div>
+<div id="loadOv">
+  <div class="loadCard">
+    <div class="escWrap">
+      <div class="escarapela"></div>
+      <div class="escBrillo"></div>
+      <div class="escCintas"><i></i><i></i></div>
+    </div>
+    <div>
+      <p class="text-[13px] font-bold text-gray-800 leading-tight">Consultando el SIGA<span class="loadDots"></span></p>
+      <p class="text-[11px] text-gray-500 mt-0.5">Ejecución del gasto por centro de costo</p>
+    </div>
+  </div>
+</div>
+<style>
+  :root{ --rojoPE:#D91023; --rojoPE-osc:#B00D1D; }
+
+  /* barra superior de progreso (roja, en juego con la escarapela) */
+  #loadBar{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;overflow:hidden;opacity:0;transition:opacity .2s}
+  #loadBar.on{opacity:1}
+  #loadBar span{position:absolute;inset:0;width:40%;border-radius:99px;
+    background:linear-gradient(90deg,transparent,var(--rojoPE),#ff5a68,transparent);
+    animation:ldSlide 1.1s cubic-bezier(.4,0,.2,1) infinite}
+  @keyframes ldSlide{0%{left:-40%}100%{left:100%}}
+
+  /* velo + tarjeta */
+  #loadOv{position:fixed;inset:0;z-index:55;display:none;place-items:center;
+    background:rgba(248,250,252,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+  #loadOv.on{display:grid;animation:ldFade .18s ease}
+  @keyframes ldFade{from{opacity:0}to{opacity:1}}
+  .loadCard{display:flex;align-items:center;gap:16px;padding:18px 24px;border-radius:14px;background:#fff;
+    box-shadow:0 12px 40px -12px rgba(15,23,42,.28),0 0 0 1px rgba(15,23,42,.05);
+    animation:ldRise .25s cubic-bezier(.2,.8,.2,1)}
+  @keyframes ldRise{from{transform:translateY(8px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+
+  /* ── Escarapela: rojo · blanco · rojo, girando con brillo ── */
+  .escWrap{position:relative;width:52px;height:58px;flex-shrink:0}
+  .escarapela{
+    position:absolute;top:0;left:2px;width:48px;height:48px;border-radius:50%;
+    background:
+      radial-gradient(circle at 50% 50%,
+        var(--rojoPE)      0 27%,          /* botón central rojo */
+        #fff               27% 30%,
+        #fdfdfd            30% 55%,        /* anillo blanco */
+        #f1f2f4            55% 58%,
+        var(--rojoPE)      58% 78%,        /* anillo rojo exterior */
+        var(--rojoPE-osc)  78% 100%);
+    /* pliegues radiales de la cinta, muy sutiles */
+    -webkit-mask:none;
+    box-shadow:0 2px 6px rgba(176,13,29,.35), inset 0 1px 2px rgba(255,255,255,.5);
+    animation:escSpin 3.2s linear infinite;
+  }
+  .escarapela::after{  /* pliegues: rayitos casi transparentes que giran con ella */
+    content:'';position:absolute;inset:0;border-radius:50%;
+    background:repeating-conic-gradient(from 0deg,
+      rgba(0,0,0,.05) 0deg 2deg, transparent 2deg 15deg);
+  }
+  @keyframes escSpin{to{transform:rotate(360deg)}}
+
+  /* brillo que barre por encima (gira en sentido contrario: da vida sin marear) */
+  .escBrillo{
+    position:absolute;top:0;left:2px;width:48px;height:48px;border-radius:50%;pointer-events:none;
+    background:conic-gradient(from 0deg,
+      transparent 0deg, rgba(255,255,255,.5) 28deg, transparent 70deg 360deg);
+    animation:escGlint 2.1s linear infinite reverse;
+    mix-blend-mode:soft-light;
+  }
+  @keyframes escGlint{to{transform:rotate(360deg)}}
+
+  /* cintas colgantes (quietas: solo gira el rosetón) */
+  .escCintas{position:absolute;bottom:0;left:50%;transform:translateX(-50%);display:flex;gap:3px}
+  .escCintas i{
+    width:7px;height:13px;background:linear-gradient(180deg,var(--rojoPE),var(--rojoPE-osc));
+    clip-path:polygon(0 0,100% 0,100% 100%,50% 72%,0 100%);
+    box-shadow:0 1px 2px rgba(176,13,29,.3);
+  }
+  .escCintas i:first-child{transform:rotate(-14deg) translateY(-1px)}
+  .escCintas i:last-child {transform:rotate( 14deg) translateY(-1px)}
+
+  .loadDots::after{content:'';animation:ldDots 1.4s steps(4,end) infinite}
+  @keyframes ldDots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+</style>
+
 <!-- Aviso de sesión expirada -->
 <div id="sesionOv" class="hidden fixed inset-0 z-50 grid place-items-center" style="background:rgba(15,23,42,.45)">
   <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm mx-4 text-center">
@@ -122,6 +208,21 @@ include __DIR__ . '/partials/head.php';
 <script>
 const money = n => 'S/ ' + (+n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
 const short = n => { n=+n||0; if(Math.abs(n)>=1e6) return (n/1e6).toFixed(1)+'M'; if(Math.abs(n)>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toFixed(0); };
+
+/* ── Loader (escarapela): barra al instante, tarjeta tras 250 ms.
+   Así, cuando la caché del API responde de inmediato, solo se ve el
+   destello de la barra y no un modal que aparece y desaparece. ── */
+let ldT=null;
+function showLoad(){
+  document.getElementById('loadBar').classList.add('on');
+  clearTimeout(ldT);
+  ldT=setTimeout(()=>document.getElementById('loadOv').classList.add('on'),250);
+}
+function hideLoad(){
+  clearTimeout(ldT);
+  document.getElementById('loadBar').classList.remove('on');
+  document.getElementById('loadOv').classList.remove('on');
+}
 
 /* Los 3 estados del reporte, con el mismo color en toda la app. */
 const FASES = [
@@ -332,6 +433,7 @@ function gotoPage(p){ tblPage=p; renderTable(); }
 /* ---- Carga ---- */
 async function load(anio){
   document.getElementById('sub').textContent='cargando…';
+  showLoad();
   try{
     const res=await fetch('dashboard-api.php?anio='+anio, {credentials:'same-origin'});
 
@@ -351,6 +453,7 @@ async function load(anio){
     tblPage=1;
     render();
   }catch(e){ document.getElementById('sub').innerHTML='<span class="text-red-600">Error: '+e.message+'</span>'; }
+  finally{ hideLoad(); }
 }
 document.getElementById('tblSearch').addEventListener('input',()=>{ tblPage=1; renderTable(); });
 document.getElementById('anio').addEventListener('change',e=>{ const a=e.target.value; history.replaceState(null,'','?anio='+a); load(a); });

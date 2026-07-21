@@ -25,15 +25,60 @@ tailwind.config={theme:{extend:{colors:{
   secondary:{DEFAULT:'#0d6efd',light:'#4d94ff',dark:'#0a58ca'},
   warning:'#ffc107', info:'#0dcaf0'}}}};
 </script>
+<script>
+/* Aplicar el estado guardado del sidebar ANTES del primer pintado:
+   evita el parpadeo ancho→angosto al cargar. Debe ir en el <head>. */
+try{ if(localStorage.getItem('siga.sb')==='min') document.documentElement.classList.add('sbMin'); }catch(e){}
+</script>
 <style>
   :root{ --teal:rgb(26,187,156); --teal-dark:rgb(20,150,125); }
 
-  /* ── Sidebar ── */
+  /* ── Sidebar ─────────────────────────────────────────────
+     Dos estados en escritorio: expandido (15rem) y comprimido (4rem, solo
+     iconos). La clase .sbMin va en <html> y se recuerda en localStorage.
+     En móvil (<1024px) es un cajón deslizante y SIEMPRE sale expandido. */
+  #sidebar{width:15rem;transition:width .18s cubic-bezier(.2,.8,.2,1)}
+
+  @media (min-width:1024px){
+    html.sbMin #sidebar{width:4rem}
+    /* lo que desaparece al comprimir */
+    html.sbMin #sidebar .sbTxt{display:none}
+    html.sbMin #sidebar .sbGrpTitle{display:none}
+    html.sbMin #sidebar .sbBrandTxt{display:none}
+    html.sbMin #sidebar .sbFoot{display:none}
+    html.sbMin #sidebar .sbDotActivo{display:none}
+    html.sbMin #sidebar .sbKbd{display:none}
+    /* centrar iconos */
+    html.sbMin #sidebar .navlink{justify-content:center;padding-left:.5rem;padding-right:.5rem}
+    html.sbMin #sidebar .sbBrand{justify-content:center;padding-left:0;padding-right:0}
+    html.sbMin #sidebar .sbQuick{justify-content:center;padding-left:.5rem;padding-right:.5rem}
+    html.sbMin #sidebar nav{padding-left:.5rem;padding-right:.5rem}
+    /* separador entre grupos cuando no hay títulos */
+    html.sbMin #sidebar .sbGrp + .sbGrp{border-top:1px solid #f1f5f9;padding-top:.75rem}
+    /* flecha del botón plegar */
+    html.sbMin #sidebar #sbToggle i{transform:rotate(180deg)}
+    /* tooltip a la derecha del icono (solo comprimido) */
+    html.sbMin #sidebar .navlink{position:relative}
+    html.sbMin #sidebar .navlink::after{
+      content:attr(data-tip); position:absolute; left:calc(100% + 10px); top:50%;
+      transform:translateY(-50%) translateX(-4px); white-space:nowrap;
+      background:#1f2937; color:#fff; font-size:11px; font-weight:600;
+      padding:5px 9px; border-radius:7px; pointer-events:none;
+      opacity:0; transition:opacity .12s ease, transform .12s ease; z-index:60;
+      box-shadow:0 6px 20px -6px rgba(15,23,42,.45)}
+    html.sbMin #sidebar .navlink:hover::after{opacity:1;transform:translateY(-50%) translateX(0)}
+  }
+
+  /* Botón plegar: solo escritorio */
+  #sbToggle{display:none}
+  @media (min-width:1024px){ #sbToggle{display:grid} }
+
+  /* Móvil: cajón deslizante (idéntico a antes) */
   #sbBack{display:none}
   body.sbOn #sbBack{display:block}
   @media (max-width:1023px){
     #sidebar{position:fixed;inset:0 auto 0 0;z-index:50;transform:translateX(-100%);
-             transition:transform .22s cubic-bezier(.2,.8,.2,1)}
+             transition:transform .22s cubic-bezier(.2,.8,.2,1);width:15rem!important}
     body.sbOn #sidebar{transform:none}
   }
   .navlink{transition:background .12s ease,color .12s ease}
