@@ -106,11 +106,18 @@ class CmnQuery
                           THEN 'CERTIFICADO · Cert ' + CONVERT(VARCHAR, cert.NRO_CERTIFICA)
                           ELSE 'PENDIENTE' END)                 AS ESTADO_ORDEN,
             ''                                                      AS RESPONSABLE,
-            /* Estado(s) de línea del CMN (columna Incl/Excl del SIGA):
-               C = aprobado en el cuadro base · I = incluido por modificación. */
-            STUFF(  CASE WHEN D.LIN_APROB > 0 THEN ', APROBADO' ELSE '' END
+            /* ESTADO DE LÍNEA DEL CMN (columna Incl/Excl del SIGA + ajuste de montos):
+                 ANTIGUO    = venía del cuadro base aprobado (sin marca I/E)
+                 INCLUIDO   = añadido por modificación (I / IT)
+                 EXCLUIDO   = alguna línea del ítem fue retirada (E / ET)
+                 MODIFICADO = el importe vigente difiere del original (el SIGA lo
+                              recalcula solo al cambiar cantidad o precio). */
+            STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', ANTIGUO' ELSE '' END
                   + CASE WHEN D.LIN_INCL  > 0 THEN ', INCLUIDO' ELSE '' END
-                  + CASE WHEN D.LIN_OTRO  > 0 THEN ', BASE'     ELSE '' END
+                  + CASE WHEN D.LIN_EXCL  > 0 THEN ', EXCLUIDO' ELSE '' END
+                  + CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0
+                              AND ABS(D.MNTO_TOTAL - ori.MNTO_TOTAL) > 0.005
+                         THEN ', MODIFICADO' ELSE '' END
                   , 1, 2, '')                                       AS ESTADO_CMN,
             D.NRO_LINEAS                                            AS NRO_LINEAS,
             CASE WHEN D.TIPO_BIEN='S'
@@ -141,24 +148,29 @@ class CmnQuery
             SELECT SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                    SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                    GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN, UNIDAD_MEDIDA,
-                   SUM(CANT_TOTAL)  AS CANT_TOTAL,
-                   SUM(MNTO_TOTAL)  AS MNTO_TOTAL,
-                   CASE WHEN SUM(CANT_TOTAL) > 0 THEN SUM(MNTO_TOTAL) / SUM(CANT_TOTAL)
+                   /* Los importes solo suman líneas VIGENTES (las excluidas no cuentan). */
+                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END) AS CANT_TOTAL,
+                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN MNTO_TOTAL ELSE 0 END) AS MNTO_TOTAL,
+                   CASE WHEN SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END) > 0
+                        THEN SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN MNTO_TOTAL ELSE 0 END)
+                           / SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END)
                         ELSE MAX(PRECIO_UNIT) END AS PRECIO_UNIT,
                    MAX(SEC_CUA_MOD_SAL) AS SEC_CUA_MOD_SAL,
                    COUNT(*)             AS NRO_LINEAS,
-                   SUM(CASE WHEN ESTADO IN ('I','IT') THEN 1 ELSE 0 END)                    AS LIN_INCL,
-                   SUM(CASE WHEN ESTADO = 'C' THEN 1 ELSE 0 END)                            AS LIN_APROB,
-                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('I','IT','C') THEN 1 ELSE 0 END) AS LIN_OTRO
+                   SUM(CASE WHEN ESTADO IN ('I','IT') THEN 1 ELSE 0 END)                              AS LIN_INCL,
+                   SUM(CASE WHEN ESTADO IN ('E','ET') THEN 1 ELSE 0 END)                              AS LIN_EXCL,
+                   SUM(CASE WHEN ESTADO = 'C' THEN 1 ELSE 0 END)                                      AS LIN_APROB,
+                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('I','IT','C','E','ET') THEN 1 ELSE 0 END)  AS LIN_OTRO
             FROM   SIG_CUADRO_MODIFICADO_DET
             WHERE  ANNO_PROG = :anioProg
               AND  ANNO_EJEC = :anioEjec
               AND  SEC_EJEC  = :secEjec
               {$filtroCC}
-              AND  ISNULL(ESTADO,'') NOT IN ('E','ET')
             GROUP BY SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                      SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                      GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN, UNIDAD_MEDIDA
+            /* Se descartan los ítems cuyas líneas están TODAS excluidas. */
+            HAVING SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) > 0
         ) D
         JOIN      SIG_CENTRO_COSTO cc
                   ON cc.SEC_EJEC=D.SEC_EJEC AND cc.ANO_EJE=D.ANNO_EJEC AND cc.CENTRO_COSTO=D.CENTRO_COSTO
@@ -390,8 +402,13 @@ class CmnQuery
         $order = match ($sort) {
             'mod_asc'  => 'T.IMPORTE_MOD ASC',
             'item_asc' => 'T.NOMBRE_ITEM ASC',
+            /* Agrupado: actividad operativa y, dentro de ella, código de bien. */
+            'act_item' => 'T.ACTIV_OPERAT_COD ASC, T.GRUPO_BIEN ASC, T.CLASE_BIEN ASC, T.FAMILIA_BIEN ASC, T.ITEM_BIEN ASC',
             default    => 'T.IMPORTE_MOD DESC',
         };
+        /* El desempate no debe repetir columnas ya presentes en $order
+           (SQL Server no admite columnas duplicadas en el ORDER BY). */
+        $tie = ($sort === 'act_item') ? '' : ', T.CCOSTO_COD, T.ITEM_BIEN';
 
         $cst = $this->db->prepare("SELECT COUNT(*) FROM ({$inner}) T {$w}");
         $this->bindBase($cst, $anioProg, $anioEjec, $secEjec, $ccosto);
@@ -402,7 +419,7 @@ class CmnQuery
         $offset  = max(0, ($page - 1) * $perPage);
         $sql = "SELECT T.*, ({$fexpr}) AS ESTADO_FASE
                 FROM ({$inner}) T {$w}
-                ORDER BY {$order}, T.CCOSTO_COD, T.ITEM_BIEN
+                ORDER BY {$order}{$tie}
                 OFFSET {$offset} ROWS FETCH NEXT " . (int)$perPage . " ROWS ONLY";
         $st = $this->db->prepare($sql);
         $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
@@ -419,7 +436,10 @@ class CmnQuery
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
         $w = $this->whereFiltros($tipo, $search, $meta, $act, '');
-        $sql = "SELECT ({$fexpr}) AS fase, COUNT(*) c, SUM(T.IMPORTE_MOD) monto
+        $sql = "SELECT ({$fexpr}) AS fase, COUNT(*) c,
+                       SUM(T.IMPORTE_PROG) prog,
+                       SUM(T.IMPORTE_MOD)  monto,
+                       SUM(T.IMPORTE_EJEC) ejec
                 FROM ({$inner}) T {$w} GROUP BY ({$fexpr})";
         $st = $this->db->prepare($sql);
         $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);

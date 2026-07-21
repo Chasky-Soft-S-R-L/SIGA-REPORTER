@@ -1,0 +1,92 @@
+# ═══════════════════════════════════════════════════════════
+#  SIGA-REPORTER · .gitignore
+# ═══════════════════════════════════════════════════════════
+
+# ── Secretos y configuración local ─────────────────────────
+# NUNCA subir el .env: lleva servidor y credenciales de la BD.
+.env
+.env.*
+!.env.example
+*.local.php
+config.local.php
+
+# ── Logs ───────────────────────────────────────────────────
+logs/
+*.log
+php-error.log
+error_log
+info/
+
+# ── Caché y temporales de la aplicación ────────────────────
+cache/
+tmp/
+temp/
+cmn_dash_*.json
+*.cache
+
+# ── Exportaciones generadas (Excel / PDF) ──────────────────
+# Son salidas del reporte, no código fuente.
+exports/
+salidas/
+CMN_*.xlsx
+CMN_*.xls
+CMN_*.pdf
+
+# ── Dependencias ───────────────────────────────────────────
+/vendor/
+composer.lock
+node_modules/
+package-lock.json
+
+# ── Volcados y respaldos de base de datos ──────────────────
+# Contienen datos reales de la entidad: fuera del repositorio.
+*.bak
+*.bacpac
+*.mdf
+*.ldf
+*.sql.gz
+*.sql.zip
+backup/
+respaldos/
+dump/
+
+# ── Editores e IDE ─────────────────────────────────────────
+.vscode/
+!.vscode/settings.json.example
+.idea/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+*~
+.phpstorm.meta.php
+_ide_helper.php
+
+# ── Sistema operativo ──────────────────────────────────────
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+# macOS
+.DS_Store
+.AppleDouble
+._*
+# Linux
+.fuse_hidden*
+.Trash-*
+
+# ── Herramientas PHP ───────────────────────────────────────
+.php-cs-fixer.cache
+.phpunit.result.cache
+.phpunit.cache/
+/coverage/
+
+# ── Archivos sueltos de pruebas ────────────────────────────
+test.php
+prueba.php
+scratch.php
+_borrar*
+*.orig
+*.rej

@@ -1,96 +1,139 @@
 <?php
 /**
  * dashboard.php  ·  Dashboard reactivo del CMN (cross-filter)
- * Clic en centro / meta / fase / genérica -> filtra TODO el panel al instante.
+ * Clic en centro / meta / estado / genérica -> filtra TODO el panel al instante.
  * Consume dashboard-api.php.  Servir: php -S localhost:8000 -t E:\SIGA-REPORTER
  * Abrir: http://localhost:8000/dashboard.php?anio=2026
+ *
+ * ESTADOS (3, iguales al reporte): Programado · Modificado · Ejecutado.
+ * DIFERENCIA = saldo por ejecutar (negativo = sobre-ejecución).
+ *
+ * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
  */
-$anio = (int)($_GET['anio'] ?? 2026);
-?>
-<!doctype html>
-<html lang="es">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Dashboard CMN · <?= $anio ?></title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<script>
-tailwind.config = { theme: { extend: { colors: {
-  primary:{light:'rgb(72,230,198)',DEFAULT:'rgb(26,187,156)',dark:'rgb(20,150,125)'},
-  secondary:{DEFAULT:'#0d6efd',light:'#4d94ff',dark:'#0a58ca'}, warning:'#ffc107', info:'#0dcaf0'
-} } } };
-</script>
-</head>
-<body class="bg-gray-50 text-gray-800">
-<div class="max-w-[1400px] mx-auto p-3 sm:p-5">
 
-  <header class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-4">
-    <div>
-      <span class="text-primary-dark font-bold text-sm">SIGA · REPORTES</span>
-      <h1 class="text-lg sm:text-xl font-bold text-gray-800">Dashboard del Cuadro de Necesidades <span class="text-primary">· <?= $anio ?></span></h1>
-      <p id="sub" class="text-xs text-gray-400">cargando…</p>
-    </div>
-    <div class="flex items-center gap-2">
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/Auth.php';
+
+/* ---- SEGURIDAD: sin sesión no se entra (igual que index.php) ---- */
+$auth = new Auth();
+$auth->exigirLogin();
+$USR = $auth->usuario();
+
+$ANIO   = (int)($_GET['anio'] ?? ANIO_PROG);
+$anio   = $ANIO;               // alias que usa el JS de esta vista
+$PAGINA = 'dashboard';         // clave en partials/nav.php
+
+/* ---- Variables de los partials ---- */
+$TITULO_PAG = "Dashboard CMN · {$anio}";
+$EXTRA_HEAD = '<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>';
+
+$TITULO    = 'Dashboard del CMN <span class="text-primary">· '.$anio.'</span>';
+$SUBTITULO = '<span id="sub">cargando…</span>';
+$ACCIONES  = '
       <label class="text-xs text-gray-500">Año</label>
-      <input id="anio" type="number" value="<?= $anio ?>" class="w-24 px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
-      <a href="index.php?anio=<?= $anio ?>" class="px-3 py-2 text-sm rounded-lg bg-white border border-gray-300 hover:bg-gray-50">Ver reporte</a>
+      <input id="anio" type="number" value="'.$anio.'" class="input-bordered w-24 py-2">
+      <a href="index.php?anio='.$anio.'" class="px-3 py-2 text-sm rounded-lg bg-white border border-gray-300 hover:bg-gray-50">Ver reporte</a>';
+
+include __DIR__ . '/partials/head.php';
+?>
+<body class="bg-gray-50 text-gray-800">
+<div class="flex min-h-screen">
+  <?php include __DIR__ . '/partials/sidebar.php'; ?>
+
+  <main class="flex-1 min-w-0 p-3 sm:p-5">
+    <?php include __DIR__ . '/partials/header.php'; ?>
+
+    <!-- Filtros activos (breadcrumb) -->
+    <div id="activeFilters" class="flex flex-wrap gap-2 mb-3"></div>
+
+    <!-- Chips de estado: mismos 3 estados y mismos totales que el reporte -->
+    <div id="chips" class="flex flex-wrap gap-2 mb-3"></div>
+
+    <!-- KPIs -->
+    <div id="kpis" class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4"></div>
+
+    <!-- Tabla resumen por centro (foco principal · filtra todo el panel) -->
+    <div class="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
+      <div class="px-4 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        <h3 class="text-sm font-semibold text-gray-700">Centros de costo · programado, modificado y ejecutado <span class="font-normal text-gray-400">(clic para filtrar)</span></h3>
+        <div class="relative w-full sm:w-72">
+          <input id="tblSearch" type="text" placeholder="Buscar centro por código o nombre…" class="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
+          <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path d="M21 21l-4-4" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+      </div>
+      <div class="overflow-auto">
+      <table class="min-w-full text-xs">
+        <thead class="bg-gray-50 text-gray-500">
+          <tr>
+            <th class="px-3 py-2 text-left">Centro</th>
+            <th class="px-3 py-2 text-right">Programado</th>
+            <th class="px-3 py-2 text-right">Modificado</th>
+            <th class="px-3 py-2 text-right">Ejecutado</th>
+            <th class="px-3 py-2 text-right">Diferencia</th>
+            <th class="px-3 py-2 text-right">% Avance</th>
+          </tr>
+        </thead>
+        <tbody id="tblCentros" class="divide-y divide-gray-100"></tbody>
+      </table>
+      </div>
+      <div id="tblPager" class="flex items-center justify-between gap-2 px-4 py-3 border-t border-gray-100 text-xs text-gray-500"></div>
     </div>
-  </header>
 
-  <!-- Filtros activos (breadcrumb) -->
-  <div id="activeFilters" class="flex flex-wrap gap-2 mb-3"></div>
-
-  <!-- KPIs -->
-  <div id="kpis" class="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-4"></div>
-
-  <!-- Tabla resumen por centro (foco principal · filtra todo el panel) -->
-  <div class="bg-white rounded-xl border border-gray-200 overflow-hidden mb-4">
-    <div class="px-4 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-      <h3 class="text-sm font-semibold text-gray-700">Centros de costo · ejecutado y pendiente <span class="font-normal text-gray-400">(clic para filtrar)</span></h3>
-      <div class="relative w-full sm:w-72">
-        <input id="tblSearch" type="text" placeholder="Buscar centro por código o nombre…" class="w-full pl-9 pr-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">
-        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path d="M21 21l-4-4" stroke-width="2" stroke-linecap="round"/></svg>
+    <!-- Gráficos de apoyo -->
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+      <div class="bg-white rounded-xl border border-gray-200 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 mb-2">Ítems por estado</h3>
+        <p class="text-xs text-gray-400 mb-2">Clic en un estado para filtrar</p>
+        <div class="h-64"><canvas id="chFase"></canvas></div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 mb-2">Modificado vs. ejecutado por meta</h3>
+        <p class="text-xs text-gray-400 mb-2">Clic en una meta para filtrar</p>
+        <div class="h-64"><canvas id="chMeta"></canvas></div>
+      </div>
+      <div class="bg-white rounded-xl border border-gray-200 p-4">
+        <h3 class="text-sm font-semibold text-gray-700 mb-2">Modificado vs. ejecutado por genérica</h3>
+        <p class="text-xs text-gray-400 mb-2">Clic en una genérica para filtrar</p>
+        <div class="h-64"><canvas id="chGen"></canvas></div>
       </div>
     </div>
-    <div class="overflow-auto">
-    <table class="min-w-full text-xs">
-      <thead class="bg-gray-50 text-gray-500">
-        <tr><th class="px-3 py-2 text-left">Centro</th><th class="px-3 py-2 text-right">Programado</th><th class="px-3 py-2 text-right">Modificado</th><th class="px-3 py-2 text-right">Ejecutado</th><th class="px-3 py-2 text-right">Pendiente</th><th class="px-3 py-2 text-right">% Avance</th></tr>
-      </thead>
-      <tbody id="tblCentros" class="divide-y divide-gray-100"></tbody>
-    </table>
-    </div>
-    <div id="tblPager" class="flex items-center justify-between gap-2 px-4 py-3 border-t border-gray-100 text-xs text-gray-500"></div>
-  </div>
 
-  <!-- Gráficos de apoyo -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-    <div class="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 class="text-sm font-semibold text-gray-700 mb-2">Ejecución por fase del gasto</h3>
-      <p class="text-xs text-gray-400 mb-2">Clic en una fase para filtrar</p>
-      <div class="h-64"><canvas id="chFase"></canvas></div>
-    </div>
-    <div class="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 class="text-sm font-semibold text-gray-700 mb-2">Monto por meta</h3>
-      <p class="text-xs text-gray-400 mb-2">Clic en una meta para filtrar</p>
-      <div class="h-64"><canvas id="chMeta"></canvas></div>
-    </div>
-    <div class="bg-white rounded-xl border border-gray-200 p-4">
-      <h3 class="text-sm font-semibold text-gray-700 mb-2">Monto por genérica de gasto</h3>
-      <p class="text-xs text-gray-400 mb-2">Clic en una genérica para filtrar</p>
-      <div class="h-64"><canvas id="chGen"></canvas></div>
-    </div>
-  </div>
+    <p class="text-[11px] text-gray-400 mt-3">
+      Programado = cuadro de necesidades aprobado · Modificado = importe vigente del CMN ·
+      Ejecutado = devengado real atribuido al centro · Diferencia = saldo por ejecutar
+      (negativo significa que se ejecutó más cantidad de la cuadrada). Datos al momento de la consulta.
+    </p>
+  </main>
+</div>
 
-  <p class="text-[11px] text-gray-400 mt-3">Los montos usan el CMN modificado (vigente). Ejecutado = valorización al precio real de compra devengado. Datos al momento de la consulta.</p>
+<!-- Aviso de sesión expirada -->
+<div id="sesionOv" class="hidden fixed inset-0 z-50 grid place-items-center" style="background:rgba(15,23,42,.45)">
+  <div class="bg-white rounded-2xl shadow-2xl p-6 max-w-sm mx-4 text-center">
+    <div class="w-12 h-12 mx-auto rounded-full grid place-items-center mb-3" style="background:#fef3c7">
+      <i class="fa-solid fa-clock-rotate-left text-xl" style="color:#b45309"></i>
+    </div>
+    <p class="font-bold text-gray-800">La sesión expiró</p>
+    <p class="text-xs text-gray-500 mt-1 mb-4">Vuelve a iniciar sesión para seguir consultando el dashboard.</p>
+    <a href="login.php?next=dashboard.php" class="inline-block w-full py-2.5 rounded-lg text-sm font-semibold text-white"
+       style="background:linear-gradient(135deg,var(--teal),var(--teal-dark))">Iniciar sesión</a>
+  </div>
 </div>
 
 <script>
 const money = n => 'S/ ' + (+n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
 const short = n => { n=+n||0; if(Math.abs(n)>=1e6) return (n/1e6).toFixed(1)+'M'; if(Math.abs(n)>=1e3) return (n/1e3).toFixed(1)+'k'; return n.toFixed(0); };
-const FASE_COLOR = {PENDIENTE:'#9ca3af', CERTIFICADO:'#ffc107', COMPROMETIDO:'#0d6efd', DEVENGADO:'rgb(26,187,156)'};
-const FASES = ['PENDIENTE','CERTIFICADO','COMPROMETIDO','DEVENGADO'];
+
+/* Los 3 estados del reporte, con el mismo color en toda la app. */
+const FASES = [
+  {key:'PROGRAMADO', label:'Programado', color:'#9ca3af',
+   tip:'Sigue tal como se aprobó en el cuadro de necesidades'},
+  {key:'MODIFICADO', label:'Modificado', color:'#ffc107',
+   tip:'El importe vigente cambió respecto del original'},
+  {key:'EJECUTADO',  label:'Ejecutado',  color:'rgb(26,187,156)',
+   tip:'Tiene devengado real registrado'}
+];
+const FKEYS = FASES.map(f=>f.key);
+const FCOL  = Object.fromEntries(FASES.map(f=>[f.key,f.color]));
 
 let ITEMS = [];
 const filters = { cc:null, meta:null, fase:null, gen:null };
@@ -106,8 +149,14 @@ const applyAll = () => ITEMS.filter(d=>passExcept(d,null));
 
 function groupSum(items, keyFn){
   const m=new Map();
-  items.forEach(d=>{ const k=keyFn(d); const g=m.get(k)||{prog:0,mod:0,ejec:0,pend:0,n:0,label:k}; g.prog+=d.prog;g.mod+=d.mod;g.ejec+=d.ejec;g.pend+=d.pend;g.n++; m.set(k,g); });
+  items.forEach(d=>{ const k=keyFn(d);
+    const g=m.get(k)||{prog:0,mod:0,ejec:0,dif:0,n:0,label:k};
+    g.prog+=d.prog; g.mod+=d.mod; g.ejec+=d.ejec; g.dif+=d.dif; g.n++; m.set(k,g); });
   return [...m.values()];
+}
+function totales(items){
+  return items.reduce((a,d)=>{a.prog+=d.prog;a.mod+=d.mod;a.ejec+=d.ejec;a.dif+=d.dif;a.n++;return a;},
+                      {prog:0,mod:0,ejec:0,dif:0,n:0});
 }
 
 function setFilter(dim, val){ filters[dim] = (filters[dim]===val ? null : val); render(); }
@@ -115,9 +164,9 @@ function setFilter(dim, val){ filters[dim] = (filters[dim]===val ? null : val); 
 function render(){
   const all = applyAll();
   renderActive();
+  renderChips();
   renderKPIs(all);
   renderFase();
-  renderCentro();
   renderMeta();
   renderGen();
   renderTable();
@@ -126,7 +175,7 @@ function render(){
 /* ---- Filtros activos ---- */
 function renderActive(){
   const box=document.getElementById('activeFilters'); box.innerHTML='';
-  const labels={cc:'Centro',meta:'Meta',fase:'Fase',gen:'Genérica'};
+  const labels={cc:'Centro',meta:'Meta',fase:'Estado',gen:'Genérica'};
   let any=false;
   for(const k in filters){ if(filters[k]){ any=true;
     const b=document.createElement('button');
@@ -136,88 +185,102 @@ function renderActive(){
     box.appendChild(b);
   }}
   if(any){ const c=document.createElement('button'); c.className='px-3 py-1 rounded-full text-xs bg-gray-200 text-gray-600 hover:bg-gray-300'; c.textContent='Limpiar todo'; c.onclick=()=>{Object.keys(filters).forEach(k=>filters[k]=null);render();}; box.appendChild(c); }
-  else box.innerHTML='<span class="text-xs text-gray-400">Sin filtros · haz clic en cualquier gráfico para filtrar</span>';
+  else box.innerHTML='<span class="text-xs text-gray-400">Sin filtros · haz clic en cualquier gráfico, chip o centro para filtrar</span>';
+}
+
+/* ---- Chips de estado (mismos totales que el reporte) ----
+   El importe del chip es el TOTAL de esa columna (Σ programado, Σ modificado,
+   Σ ejecutado) del universo filtrado; el número es la cantidad de ítems que
+   están en ese estado, que es lo que filtra al hacer clic. */
+function renderChips(){
+  const box=document.getElementById('chips'); box.innerHTML='';
+  const base = ITEMS.filter(d=>passExcept(d,'fase'));
+  const t = totales(base);
+  const cuenta = Object.fromEntries(FKEYS.map(k=>[k, base.filter(d=>d.fase===k).length]));
+  const TOT = {PROGRAMADO:t.prog, MODIFICADO:t.mod, EJECUTADO:t.ejec};
+
+  box.appendChild(chip('Todos', t.n, t.mod, '#1f2937', '#fff', !filters.fase,
+    ()=>{filters.fase=null;render();}, null,
+    'Importe vigente total '+money(t.mod)+'  ·  Ejecutado '+money(t.ejec)));
+  FASES.forEach(f=>{
+    box.appendChild(chip(f.label, cuenta[f.key]||0, TOT[f.key], f.color+'26', '#374151',
+      filters.fase===f.key, ()=>setFilter('fase',f.key), f.color,
+      f.tip+'  ·  '+(cuenta[f.key]||0)+' ítems en este estado (clic para filtrar)'));
+  });
+}
+function chip(label,count,monto,bg,fg,active,onclick,dot,tip){
+  const b=document.createElement('button'); if(tip)b.title=tip;
+  b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all'
+             +(active?' ring-2 ring-offset-1':' opacity-90 hover:opacity-100');
+  b.style.background=bg; b.style.color=fg; if(active&&dot)b.style.setProperty('--tw-ring-color',dot);
+  b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full" style="background:'+dot+'"></span>':'')
+    +'<span>'+label+'</span><span class="opacity-50">·</span><span>'+count+'</span>'
+    +'<span class="opacity-60">'+money(monto)+'</span>';
+  b.onclick=onclick; return b;
 }
 
 /* ---- KPIs ---- */
 function renderKPIs(items){
-  const t=items.reduce((a,d)=>{a.prog+=d.prog;a.mod+=d.mod;a.ejec+=d.ejec;a.pend+=d.pend;return a;},{prog:0,mod:0,ejec:0,pend:0});
+  const t=totales(items);
   const avance = t.mod>0 ? (t.ejec/t.mod*100) : 0;
+  const difCls = t.dif < -0.005 ? 'text-red-600' : 'text-secondary-dark';
   const cards=[
-    ['Programado', money(t.prog), 'text-gray-700'],
-    ['Modificado', money(t.mod), 'text-gray-700'],
-    ['Ejecutado', money(t.ejec), 'text-primary-dark'],
-    ['Pendiente', money(t.pend), 'text-secondary-dark'],
-    ['% Avance', avance.toFixed(1)+'%', 'text-gray-800'],
+    ['Programado', money(t.prog), 'text-gray-700',  t.n+' ítems'],
+    ['Modificado', money(t.mod),  'text-gray-700',  'importe vigente'],
+    ['Ejecutado',  money(t.ejec), 'text-primary-dark', 'devengado real'],
+    ['Diferencia', money(t.dif),  difCls,           'saldo por ejecutar'],
+    ['% Avance',   avance.toFixed(1)+'%', 'text-gray-800', 'ejecutado / modificado'],
   ];
   document.getElementById('kpis').innerHTML = cards.map(c=>
-    '<div class="bg-white rounded-xl border border-gray-200 p-3"><div class="text-[11px] text-gray-400 uppercase">'+c[0]+'</div><div class="text-base sm:text-lg font-bold tabular-nums '+c[2]+'">'+c[1]+'</div></div>'
+    '<div class="bg-white rounded-xl border border-gray-200 p-3">'
+    +'<div class="text-[11px] text-gray-400 uppercase">'+c[0]+'</div>'
+    +'<div class="text-base sm:text-lg font-bold tabular-nums '+c[2]+'">'+c[1]+'</div>'
+    +'<div class="text-[10px] text-gray-400">'+c[3]+'</div></div>'
   ).join('');
 }
 
 /* ---- Charts ---- */
 function makeOrUpdate(id, cfg){
+  const el=document.getElementById(id); if(!el) return;
   if(charts[id]){ charts[id].data=cfg.data; charts[id].options=cfg.options; charts[id].update(); }
-  else charts[id]=new Chart(document.getElementById(id), cfg);
+  else charts[id]=new Chart(el, cfg);
 }
 
+/* Estados: cantidad de ítems (el monto va en el tooltip y en los chips). */
 function renderFase(){
   const items = ITEMS.filter(d=>passExcept(d,'fase'));
-  const g=groupSum(items,d=>d.fase);
-  const data=FASES.map(f=>{const x=g.find(v=>v.label===f);return x?x.mod:0;});
+  const cuenta = FKEYS.map(k=>items.filter(d=>d.fase===k).length);
+  const montos = FKEYS.map(k=>items.filter(d=>d.fase===k).reduce((s,d)=>s+d.mod,0));
   makeOrUpdate('chFase',{ type:'doughnut',
-    data:{ labels:FASES, datasets:[{ data, backgroundColor:FASES.map(f=>FASE_COLOR[f]),
-      borderWidth: FASES.map(f=>filters.fase&&filters.fase!==f?0:2), borderColor:'#fff',
-      offset: FASES.map(f=>filters.fase===f?12:0) }] },
+    data:{ labels:FASES.map(f=>f.label), datasets:[{ data:cuenta,
+      backgroundColor:FASES.map(f=>f.color), borderWidth:2, borderColor:'#fff',
+      offset: FKEYS.map(k=>filters.fase===k?12:0) }] },
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{position:'bottom',labels:{font:{size:11},boxWidth:12}},
-        tooltip:{callbacks:{label:c=>c.label+': '+money(c.raw)}} },
-      onClick:(e,el)=>{ if(el.length) setFilter('fase', FASES[el[0].index]); } } });
+        tooltip:{callbacks:{label:c=>c.label+': '+c.raw+' ítems · '+money(montos[c.dataIndex])}} },
+      onClick:(e,el)=>{ if(el.length) setFilter('fase', FKEYS[el[0].index]); } } });
 }
 
-function renderCentro(){
-  const items = ITEMS.filter(d=>passExcept(d,'cc'));
-  let g=groupSum(items,d=>d.cc).sort((a,b)=>b.mod-a.mod).slice(0,15);
-  const labels=g.map(x=>x.label);
-  const names=g.map(x=>{const it=ITEMS.find(d=>d.cc===x.label);return it?it.ccn:x.label;});
-  makeOrUpdate('chCentro',{ type:'bar',
+function barMonto(id, items, keyFn, prefijo, dim, colorBase){
+  let g=groupSum(items,keyFn).sort((a,b)=>b.mod-a.mod).slice(0,15);
+  const labels=g.map(x=>prefijo+x.label);
+  makeOrUpdate(id,{ type:'bar',
     data:{ labels, datasets:[
-      { label:'Ejecutado', data:g.map(x=>x.ejec), backgroundColor:'rgb(26,187,156)', stack:'s',
-        borderWidth:g.map(x=>filters.cc&&filters.cc!==x.label?0:0) },
-      { label:'Pendiente', data:g.map(x=>x.pend), backgroundColor:'#e5e7eb', stack:'s' },
+      { label:'Modificado', data:g.map(x=>x.mod),
+        backgroundColor:g.map(x=>filters[dim]===x.label?colorBase:colorBase+'8c') },
+      { label:'Ejecutado',  data:g.map(x=>x.ejec), backgroundColor:'rgb(26,187,156)' }
     ]},
-    options:{ indexAxis:'y', responsive:true, maintainAspectRatio:false,
-      scales:{ x:{stacked:true,ticks:{callback:v=>short(v)}}, y:{stacked:true,ticks:{font:{size:10}}} },
+    options:{ responsive:true, maintainAspectRatio:false,
+      scales:{ y:{ticks:{callback:v=>short(v)}}, x:{ticks:{font:{size:10}}} },
       plugins:{ legend:{position:'bottom',labels:{font:{size:11},boxWidth:12}},
-        tooltip:{callbacks:{title:c=>names[c[0].dataIndex],label:c=>c.dataset.label+': '+money(c.raw)}} },
-      onClick:(e,el)=>{ if(el.length) setFilter('cc', labels[el[0].index]); } } });
+        tooltip:{callbacks:{
+          label:c=>c.dataset.label+': '+money(c.raw),
+          afterBody:c=>{const x=g[c[0].dataIndex];return 'Diferencia: '+money(x.dif)+'  ·  '+x.n+' ítems';} }} },
+      onClick:(e,el)=>{ if(el.length) setFilter(dim, g[el[0].index].label); } } });
 }
 
-function renderMeta(){
-  const items = ITEMS.filter(d=>passExcept(d,'meta'));
-  let g=groupSum(items,d=>d.meta||'—').sort((a,b)=>b.mod-a.mod).slice(0,15);
-  const labels=g.map(x=>'Meta '+x.label);
-  makeOrUpdate('chMeta',{ type:'bar',
-    data:{ labels, datasets:[{ data:g.map(x=>x.mod),
-      backgroundColor:g.map(x=>filters.meta===x.label?'rgb(20,150,125)':'rgba(26,187,156,.6)') }]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      scales:{ y:{ticks:{callback:v=>short(v)}}, x:{ticks:{font:{size:10}}} },
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>money(c.raw)}} },
-      onClick:(e,el)=>{ if(el.length) setFilter('meta', g[el[0].index].label); } } });
-}
-
-function renderGen(){
-  const items = ITEMS.filter(d=>passExcept(d,'gen'));
-  let g=groupSum(items,d=>d.gen||'—').sort((a,b)=>b.mod-a.mod);
-  const labels=g.map(x=>'Gen. '+x.label);
-  makeOrUpdate('chGen',{ type:'bar',
-    data:{ labels, datasets:[{ data:g.map(x=>x.mod),
-      backgroundColor:g.map(x=>filters.gen===x.label?'#0a58ca':'rgba(13,110,253,.55)') }]},
-    options:{ responsive:true, maintainAspectRatio:false,
-      scales:{ y:{ticks:{callback:v=>short(v)}}, x:{ticks:{font:{size:10}}} },
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>money(c.raw)}} },
-      onClick:(e,el)=>{ if(el.length) setFilter('gen', g[el[0].index].label); } } });
-}
+function renderMeta(){ barMonto('chMeta', ITEMS.filter(d=>passExcept(d,'meta')), d=>d.meta||'—', 'Meta ', 'meta', '#6d28d9'); }
+function renderGen(){  barMonto('chGen',  ITEMS.filter(d=>passExcept(d,'gen')),  d=>d.gen||'—',  'Gen. ',  'gen',  '#0d6efd'); }
 
 /* ---- Tabla por centro (con búsqueda + paginación) ---- */
 let tblPage = 1;
@@ -226,7 +289,7 @@ function normT(s){ return (s||'').toString().toLowerCase().normalize('NFD').repl
 
 function renderTable(){
   const items=applyAll();
-  let g=groupSum(items,d=>d.cc).sort((a,b)=>b.pend-a.pend);
+  let g=groupSum(items,d=>d.cc).sort((a,b)=>b.dif-a.dif);
   const nameOf=cc=>{const it=ITEMS.find(d=>d.cc===cc);return it?it.ccn:'';};
   g.forEach(x=>x._name=nameOf(x.label));
 
@@ -243,13 +306,14 @@ function renderTable(){
   document.getElementById('tblCentros').innerHTML = page.length? page.map(x=>{
     const av=x.mod>0?(x.ejec/x.mod*100):0;
     const sel=filters.cc===x.label?'bg-primary/5':'';
+    const difCls=x.dif<-0.005?'text-red-600 font-semibold':'text-secondary-dark';
     return '<tr class="'+sel+' hover:bg-gray-50 cursor-pointer" onclick="setFilter(\'cc\',\''+x.label+'\')">'
       +'<td class="px-3 py-2"><div class="font-medium text-gray-700">'+x.label+'</div><div class="text-[11px] text-gray-400">'+x._name+'</div></td>'
       +'<td class="px-3 py-2 text-right tabular-nums">'+money(x.prog)+'</td>'
       +'<td class="px-3 py-2 text-right tabular-nums">'+money(x.mod)+'</td>'
       +'<td class="px-3 py-2 text-right tabular-nums text-primary-dark">'+money(x.ejec)+'</td>'
-      +'<td class="px-3 py-2 text-right tabular-nums text-secondary-dark">'+money(x.pend)+'</td>'
-      +'<td class="px-3 py-2 text-right"><div class="flex items-center gap-2 justify-end"><div class="w-16 bg-gray-100 rounded-full h-1.5"><div class="bg-primary h-1.5 rounded-full" style="width:'+Math.min(av,100)+'%"></div></div><span class="tabular-nums text-gray-600">'+av.toFixed(0)+'%</span></div></td>'
+      +'<td class="px-3 py-2 text-right tabular-nums '+difCls+'">'+money(x.dif)+'</td>'
+      +'<td class="px-3 py-2 text-right"><div class="flex items-center gap-2 justify-end"><div class="w-16 bg-gray-100 rounded-full h-1.5"><div class="bg-primary h-1.5 rounded-full" style="width:'+Math.min(Math.max(av,0),100)+'%"></div></div><span class="tabular-nums text-gray-600">'+av.toFixed(0)+'%</span></div></td>'
       +'</tr>';
   }).join('') : '<tr><td colspan="6" class="px-3 py-6 text-center text-gray-400">Sin centros que coincidan</td></tr>';
 
@@ -269,18 +333,46 @@ function gotoPage(p){ tblPage=p; renderTable(); }
 async function load(anio){
   document.getElementById('sub').textContent='cargando…';
   try{
-    const res=await fetch('dashboard-api.php?anio='+anio);
+    const res=await fetch('dashboard-api.php?anio='+anio, {credentials:'same-origin'});
+
+    /* La sesión pudo expirar con la pestaña abierta. El API responde 401 en JSON
+       en vez de redirigir, para que el fetch no reciba el HTML del login. */
+    if(res.status===401){
+      document.getElementById('sesionOv').classList.remove('hidden');
+      document.getElementById('sub').innerHTML='<span class="text-amber-600">Sesión expirada</span>';
+      return;
+    }
+
     const j=await res.json();
     if(!j.ok) throw new Error(j.error||'Error');
     ITEMS=j.items;
     document.getElementById('sub').textContent=j.total+' ítems · ejecución '+j.anioEjec+' · '+new Date(j.generado).toLocaleString('es-PE');
     Object.keys(filters).forEach(k=>filters[k]=null);
+    tblPage=1;
     render();
   }catch(e){ document.getElementById('sub').innerHTML='<span class="text-red-600">Error: '+e.message+'</span>'; }
 }
 document.getElementById('tblSearch').addEventListener('input',()=>{ tblPage=1; renderTable(); });
 document.getElementById('anio').addEventListener('change',e=>{ const a=e.target.value; history.replaceState(null,'','?anio='+a); load(a); });
 load(<?= $anio ?>);
+</script>
+
+<?php include __DIR__ . '/partials/accesos.php'; ?>
+
+<script>
+/* Acciones de ESTA pantalla en la paleta Ctrl+K (registrar tras definir todo) */
+SIGA.accion('Actualizar datos', 'fa-rotate',
+  () => load(document.getElementById('anio').value),
+  'Vuelve a consultar el SIGA (usa caché de 5 min)');
+SIGA.accion('Limpiar filtros', 'fa-filter-circle-xmark',
+  () => { Object.keys(filters).forEach(k=>filters[k]=null); render(); },
+  'Quita centro, meta, estado y genérica');
+SIGA.accion('Buscar centro de costo', 'fa-building',
+  () => { document.getElementById('tblSearch').focus(); },
+  'Salta al buscador de la tabla de centros');
+SIGA.accion('Ver el reporte completo', 'fa-table-list',
+  () => { location.href='index.php?anio='+document.getElementById('anio').value; },
+  'Abre la tabla del CMN con este mismo ejercicio');
 </script>
 </body>
 </html>

@@ -5,14 +5,23 @@
  *
  * ESTADOS (3): Programado · Modificado · Ejecutado. El estado de cada ítem llega
  * ya clasificado desde la capa Query en la columna ESTADO_FASE.
+ *
+ * CONFIGURACIÓN: servidor, base, SEC_EJEC y año por defecto salen del .env a
+ * través de config.php. No hay credenciales escritas en este archivo.
+ * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
  */
-require __DIR__ . '/CmnQuery.php';
-require __DIR__ . '/ExportService.php';
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/Auth.php';
+require_once __DIR__ . '/CmnQuery.php';
+require_once __DIR__ . '/ExportService.php';
 
-const DB_SERVER='localhost'; const DB_NAME='SIGA_104'; const DB_USER=''; const DB_PASS=''; const SEC_EJEC=104;
+/* ---- SEGURIDAD: sin sesión no se entra (protege vista, endpoints y export) ---- */
+$auth = new Auth();
+$auth->exigirLogin();
+$USR = $auth->usuario();
 
 $resource  = $_GET['resource'] ?? 'cmn';
-$anioProg  = (int)($_GET['anio'] ?? 2026);
+$anioProg  = (int)($_GET['anio'] ?? ANIO_PROG);
 $ccostoRaw = $_GET['ccosto'] ?? '';
 $ccosto    = $ccostoRaw !== '' ? $ccostoRaw : null;
 $export    = $_GET['export'] ?? null;
@@ -24,11 +33,17 @@ $fQ      = trim((string)($_GET['q'] ?? ''));
 $fMeta   = (string)($_GET['meta'] ?? '');
 $fAct    = (string)($_GET['act'] ?? '');
 $fFase   = (string)($_GET['fase'] ?? '');
-$fSort   = (string)($_GET['sort'] ?? 'mod_desc');
+$fSort   = (string)($_GET['sort'] ?? 'act_item');
 $page    = max(1, (int)($_GET['page'] ?? 1));
 $perPage = min(200, max(10, (int)($_GET['perPage'] ?? 50)));
 
 if ($resource !== 'cmn') { http_response_code(404); exit('Recurso no encontrado'); }
+
+/* Mensaje de error para el navegador: en producción nunca el detalle de la
+   excepción (revelaría la cadena de conexión o las tablas del SIGA). */
+$errPublico = fn(Throwable $e) => APP_DEBUG
+    ? $e->getMessage()
+    : 'No se pudo consultar el SIGA. Revise el log del servidor.';
 
 try {
     $q        = new CmnQuery(DB_SERVER, DB_NAME, DB_USER, DB_PASS);
@@ -36,36 +51,65 @@ try {
     if ($anioEjec === null) throw new RuntimeException("No hay CMN programado para el año {$anioProg}.");
 } catch (Throwable $e) {
     http_response_code(500);
-    echo '<pre style="color:#b91c1c">Error: '.htmlspecialchars($e->getMessage()).'</pre>'; exit;
+    error_log('[index] ' . $e->getMessage());
+    echo '<pre style="color:#b91c1c">Error: '.htmlspecialchars($errPublico($e)).'</pre>'; exit;
 }
 
 /* ---- EXPORTACIÓN (respeta filtros; sin paginar) ---- */
 if ($export === 'excel' || $export === 'pdf') {
-    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,100000)['rows'];
+    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS)['rows'];
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
-    if ($export==='excel') ExportService::excel($all,$nombre); else ExportService::pdf($all,'Cuadro de Necesidades '.$anioProg);
+    // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
+    $ccNom = 'TODOS LOS CENTROS';
+    if ($ccosto) { foreach ($q->centros($anioProg,$anioEjec,SEC_EJEC) as $c) { if ($c['cod']===$ccosto) { $ccNom = $c['cod'].'  ·  '.$c['nombre']; break; } } }
+    $meta = ['titulo'=>'CUADRO DE NECESIDADES '.$anioProg.'  (ejecución '.$anioEjec.')',
+             'centro'=>$ccNom, 'anio'=>$anioProg, 'agrupar'=>($fSort==='act_item'),
+             'entidad'=>APP_ENTIDAD];
+
+    /* Campos visibles elegidos en pantalla (selector de campos). Si ExportService
+       aún no los soporta, esta sección es inocua: solo recorta las claves del array. */
+    $colsSel = array_values(array_filter(array_map('trim', explode(',', (string)($_GET['cols'] ?? '')))));
+    if ($colsSel) {
+        $colsSel = array_values(array_intersect($colsSel, array_keys(ExportService::HEADERS)));
+        if ($colsSel) {
+            $keep = array_flip($colsSel);
+            $all  = array_map(fn($r) => array_intersect_key($r, $keep), $all);
+            $meta['cols'] = $colsSel;
+        }
+    }
+
+    if ($export==='excel') ExportService::excel($all,$nombre,$meta);
+    else ExportService::pdf($all,'CUADRO DE NECESIDADES '.$anioProg.'  (ejecución '.$anioEjec.')',$meta);
     exit;
 }
 
 /* ---- ENDPOINT: historial ---- */
 if ($action === 'historial') {
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
     try {
         echo json_encode($q->historial($anioProg,$anioEjec,SEC_EJEC,(string)($_GET['cc']??$ccosto),
             (string)($_GET['t']??''),(string)($_GET['g']??''),(string)($_GET['c']??''),
             (string)($_GET['f']??''),(string)($_GET['it']??''),(int)($_GET['meta']??0),(string)($_GET['clasif']??'')), JSON_UNESCAPED_UNICODE);
-    } catch (Throwable $e) { echo json_encode(['error'=>$e->getMessage()]); }
+    } catch (Throwable $e) {
+        error_log('[index/historial] ' . $e->getMessage());
+        echo json_encode(['error'=>$errPublico($e)], JSON_UNESCAPED_UNICODE);
+    }
     exit;
 }
 
 /* ---- ENDPOINT: datos paginados + resumen ---- */
 if ($action === 'data') {
     header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
     try {
         $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage);
         $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct);
         echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum], JSON_UNESCAPED_UNICODE);
-    } catch (Throwable $e) { echo json_encode(['error'=>$e->getMessage()]); }
+    } catch (Throwable $e) {
+        error_log('[index/data] ' . $e->getMessage());
+        echo json_encode(['error'=>$errPublico($e)], JSON_UNESCAPED_UNICODE);
+    }
     exit;
 }
 
@@ -79,35 +123,31 @@ $jsonNum   = json_encode($NUM, JSON_HEX_TAG);
 $jsonCent  = json_encode($centros, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
 $ccostoNombre='';
 foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  ·  '.$c['nombre'];break;} }
-?>
-<!doctype html><html lang="es"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>CMN <?= $anioProg ?> · Tabla / Kanban</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script>tailwind.config={theme:{extend:{colors:{
-  primary:{light:'rgb(72,230,198)',DEFAULT:'rgb(26,187,156)',dark:'rgb(20,150,125)'},
-  secondary:{DEFAULT:'#0d6efd',light:'#4d94ff',dark:'#0a58ca'},warning:'#ffc107',info:'#0dcaf0'}}}};</script>
-</head>
-<body class="bg-gray-50 text-gray-800">
-<div class="flex min-h-screen">
-  <aside class="w-52 shrink-0 bg-white border-r border-gray-200 hidden lg:block">
-    <div class="px-4 py-4 border-b border-gray-100"><span class="text-primary-dark font-bold text-sm">SIGA · REPORTES</span></div>
-    <nav class="p-2 text-sm"><a href="?resource=cmn&anio=<?= $anioProg ?>" class="block px-3 py-2 rounded-lg bg-primary/10 text-primary-dark font-medium">Cuadro de Necesidades</a></nav>
-  </aside>
-  <main class="flex-1 min-w-0 p-3 sm:p-4 flex flex-col">
-    <div class="lg:hidden mb-3"><span class="text-primary-dark font-bold text-sm">SIGA · REPORTES</span></div>
-    <header class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-3">
-      <h1 class="text-base sm:text-lg font-bold leading-tight">Cuadro de Necesidades <span class="text-primary">· <?= $anioProg ?></span>
-        <span class="block sm:inline text-xs text-gray-400 font-normal">(ejecución <?= $anioEjec ?>) · <span id="totLbl">…</span></span></h1>
-      <div class="flex gap-2">
+
+/* ---- Variables de los partials ---- */
+$ANIO   = $anioProg;      // año para sidebar y accesos
+$PAGINA = 'cmn';          // clave en partials/nav.php
+
+$TITULO_PAG = "CMN {$anioProg} · Tabla / Kanban";
+
+$TITULO    = 'Cuadro de Necesidades <span class="text-primary">· '.$anioProg.'</span>';
+$SUBTITULO = '(ejecución '.$anioEjec.') · <span id="totLbl">…</span>';
+$ACCIONES  = '
         <div class="inline-flex rounded-lg border border-gray-300 overflow-hidden text-sm" id="modeSwitch">
           <button data-mode="table" class="px-3 py-2 font-medium">Tabla</button>
           <button data-mode="kanban" class="px-3 py-2 font-medium border-l border-gray-300">Kanban</button>
         </div>
         <a id="expExcel" href="#" class="px-3 py-2 text-sm rounded-lg bg-primary text-white hover:bg-primary-dark">Excel</a>
-        <a id="expPdf" href="#" target="_blank" class="px-3 py-2 text-sm rounded-lg bg-secondary text-white hover:bg-secondary-dark">PDF</a>
-      </div>
-    </header>
+        <a id="expPdf" href="#" target="_blank" class="px-3 py-2 text-sm rounded-lg bg-secondary text-white hover:bg-secondary-dark">PDF</a>';
+
+include __DIR__ . '/partials/head.php';
+?>
+<body class="bg-gray-50 text-gray-800">
+<div class="flex min-h-screen">
+  <?php include __DIR__ . '/partials/sidebar.php'; ?>
+
+  <main class="flex-1 min-w-0 p-3 sm:p-4 flex flex-col">
+    <?php include __DIR__ . '/partials/header.php'; ?>
 
     <!-- Filtros de servidor: año + centro -->
     <form method="get" class="flex flex-col sm:flex-row sm:flex-wrap sm:items-end gap-3 mb-3 bg-white p-3 rounded-xl border border-gray-200">
@@ -142,14 +182,37 @@ foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  · 
         <select id="fAct" class="input-bordered sm:w-40"><option value="">Toda actividad</option>
           <?php foreach ($opts['actividades'] as $a): ?><option value="<?= htmlspecialchars($a) ?>" <?= $fAct===$a?'selected':'' ?>><?= htmlspecialchars($a) ?></option><?php endforeach; ?></select>
         <select id="sort" class="input-bordered sm:w-40">
-          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option></select>
+          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option><option value="act_item">Actividad + código ítem</option></select>
+        <div class="inline-flex items-center gap-1">
+          <label class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 cursor-pointer select-none whitespace-nowrap">
+            <input type="checkbox" id="agrupar" class="accent-primary" checked> Agrupar por actividad
+          </label>
+          <button id="gExpand" type="button" title="Expandir todo" class="px-2 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">⊞</button>
+          <button id="gCollapse" type="button" title="Contraer todo" class="px-2 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">⊟</button>
+
+          <!-- ── Selector de campos ── -->
+          <div class="relative" id="colBox">
+            <button id="btnCols" type="button" title="Elegir qué columnas mostrar"
+                    class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50 text-gray-700 whitespace-nowrap">
+              <i class="fa-solid fa-table-columns"></i>
+              <span class="hidden sm:inline">Campos</span>
+              <span id="colCount" class="text-[10px] font-bold bg-primary/15 text-primary-dark rounded-full px-1.5 py-0.5"></span>
+            </button>
+            <div id="colPanel" class="hidden absolute right-0 z-40 mt-2 w-[320px] bg-white border border-gray-200 rounded-xl shadow-2xl overflow-hidden"></div>
+          </div>
+
+          <button id="btnFs" type="button" title="Pantalla completa (F11 · Esc para salir)"
+                  class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50 text-gray-600">
+            <i class="fa-solid fa-expand"></i>
+          </button>
+        </div>
       </div>
     </div>
 
     <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto max-h-[calc(100vh-320px)]" style="-webkit-overflow-scrolling:touch">
       <table class="min-w-full text-xs whitespace-nowrap">
         <thead class="sticky top-0 z-10"><tr id="thead" class="bg-primary text-white"></tr></thead>
-        <tbody id="tbody" class="divide-y divide-gray-100"></tbody>
+        <tbody id="tbody"></tbody>
         <tfoot id="tfoot" class="sticky bottom-0"></tfoot>
       </table>
     </div>
@@ -169,6 +232,25 @@ foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  · 
     </div>
   </main>
 </div>
+
+<div id="fsBar">
+  <i class="fa-solid fa-table-list"></i>
+  <span class="text-[13px] font-bold">Cuadro de Necesidades <?= $anioProg ?></span>
+  <span id="fsCentro" class="text-[11px] opacity-90 truncate"><?= htmlspecialchars($ccostoNombre ?: 'Todos los centros') ?></span>
+  <span id="fsTot" class="text-[11px] opacity-90 ml-auto whitespace-nowrap"></span>
+  <button id="fsExit" class="px-2.5 py-1 rounded text-[11px] font-semibold" style="background:rgba(255,255,255,.2)">
+    <i class="fa-solid fa-compress mr-1"></i> Salir
+  </button>
+</div>
+
+<div id="loadBar"><span></span></div>
+<div id="loadOv"><div class="loadCard">
+  <div class="loadRing"><i class="fa-solid fa-circle-notch"></i><i class="fa-solid fa-file-invoice-dollar"></i></div>
+  <div>
+    <p class="text-[13px] font-bold text-gray-800 leading-tight">Consultando el SIGA<span class="loadDots"></span></p>
+    <p class="text-[11px] text-gray-500 mt-0.5">Cuadro de necesidades y ejecución del gasto</p>
+  </div>
+</div></div>
 
 <!-- Modal de trazabilidad · Expediente formal -->
 <div id="histModal" class="hidden fixed inset-0 z-50">
@@ -213,7 +295,53 @@ foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  · 
 }
 </style>
 
-<style type="text/tailwindcss">@layer components{.input-bordered{@apply w-full px-3 py-2.5 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent transition-all;}}</style>
+<style>
+  /* ── Loader elegante ───────────────────────────── */
+  #loadBar{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;background:transparent;overflow:hidden;opacity:0;transition:opacity .2s}
+  #loadBar.on{opacity:1}
+  #loadBar span{position:absolute;inset:0;width:40%;border-radius:99px;
+    background:linear-gradient(90deg,transparent,rgb(26,187,156),rgb(72,230,198),transparent);
+    animation:slide 1.1s cubic-bezier(.4,0,.2,1) infinite}
+  @keyframes slide{0%{left:-40%}100%{left:100%}}
+  #loadOv{position:fixed;inset:0;z-index:55;display:none;place-items:center;
+    background:rgba(248,250,252,.55);backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px)}
+  #loadOv.on{display:grid;animation:fadeIn .18s ease}
+  @keyframes fadeIn{from{opacity:0}to{opacity:1}}
+  .loadCard{display:flex;align-items:center;gap:14px;padding:16px 22px;border-radius:14px;background:#fff;
+    box-shadow:0 12px 40px -12px rgba(15,23,42,.28),0 0 0 1px rgba(15,23,42,.05);animation:rise .25s cubic-bezier(.2,.8,.2,1)}
+  @keyframes rise{from{transform:translateY(8px) scale(.98);opacity:0}to{transform:none;opacity:1}}
+  .loadRing{position:relative;width:38px;height:38px;display:grid;place-items:center}
+  .loadRing i.fa-circle-notch{font-size:34px;color:rgb(26,187,156);animation:spin .9s linear infinite}
+  .loadRing i.fa-file-invoice-dollar{position:absolute;font-size:13px;color:rgb(20,150,125);animation:beat 1.4s ease-in-out infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  @keyframes beat{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.12);opacity:1}}
+  .loadDots::after{content:'';animation:dots 1.4s steps(4,end) infinite}
+  @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+  /* esqueleto de tabla */
+  .skl{background:linear-gradient(90deg,#eef2f7 25%,#f8fafc 37%,#eef2f7 63%);background-size:400% 100%;
+    animation:shim 1.3s ease infinite;border-radius:4px;height:9px}
+  @keyframes shim{0%{background-position:100% 0}100%{background-position:0 0}}
+  /* ── Pantalla completa de la tabla ─────────── */
+  #viewTable.fs{position:fixed;inset:0;z-index:45;margin:0;border-radius:0;border:0;
+    max-height:none!important;height:100vh;background:#fff;padding-top:44px;
+    animation:fsIn .18s cubic-bezier(.2,.8,.2,1)}
+  @keyframes fsIn{from{opacity:.4;transform:scale(.995)}to{opacity:1;transform:none}}
+  #fsBar{display:none;position:fixed;top:0;left:0;right:0;height:44px;z-index:46;
+    align-items:center;gap:10px;padding:0 14px;color:#fff;
+    background:linear-gradient(135deg,rgb(20,150,125),rgb(26,187,156));
+    box-shadow:0 2px 12px -4px rgba(15,23,42,.4)}
+  body.fsOn #fsBar{display:flex}
+  body.fsOn{overflow:hidden}
+  tr.itemrow{transition:filter .12s ease}
+  tr.itemrow:hover{filter:brightness(.965)}
+  tr.ghead:hover{filter:brightness(1.06)}
+  tr.gsub{letter-spacing:.02em}
+  #tbody tr.itemrow td:first-child{position:relative}
+</style>
+
+<?php /* Paleta Ctrl+K ANTES del script principal: así SIGA.accion ya existe
+         cuando el IIFE de datos registra las acciones de esta pantalla. */
+include __DIR__ . '/partials/accesos.php'; ?>
 
 <script>
 /* ===== Buscador centro de costo (recarga servidor) ===== */
@@ -222,7 +350,9 @@ const nz=x=>(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,''
 function pt(t,q){if(!q)return ec(t);const nt=nz(t),nq=nz(q);let o='',i=0,x;while((x=nt.indexOf(nq,i))!==-1){o+=ec(t.slice(i,x))+'<mark class="bg-primary/20 text-primary-dark rounded px-0.5">'+ec(t.slice(x,x+q.length))+'</mark>';i=x+q.length;if(!nq.length)break;}return o+ec(t.slice(i));}
 function rd(q){const nq=nz(q),m=centros.filter(c=>nz(c.cod+' '+c.nombre).includes(nq)).slice(0,60);l.innerHTML='';const a=document.createElement('li');a.className='px-3 py-2 cursor-pointer hover:bg-primary/5 text-gray-500 border-b';a.textContent='— Todos los centros —';a.onclick=()=>pk('','');l.appendChild(a);m.forEach(c=>{const li=document.createElement('li');li.className='px-3 py-2 cursor-pointer hover:bg-primary/5';li.innerHTML='<b class="text-gray-700">'+pt(c.cod,q)+'</b> <span class="text-gray-500">· '+pt(c.nombre,q)+'</span>';li.onclick=()=>pk(c.cod,c.cod+'  ·  '+c.nombre);l.appendChild(li);});l.classList.remove('hidden');}
 function pk(cod,lab){v.value=cod;s.value=cod?lab:'';l.classList.add('hidden');cl.classList.toggle('hidden',!cod);fm.submit();}
-s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.value));cl.addEventListener('click',()=>pk('',''));document.addEventListener('click',e=>{if(!box.contains(e.target))l.classList.add('hidden');});})();
+s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.value));cl.addEventListener('click',()=>pk('',''));document.addEventListener('click',e=>{if(!box.contains(e.target))l.classList.add('hidden');});
+/* acceso rápido: enfocar el buscador de centro */
+if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',()=>{s.focus();s.select();},'Enfoca el buscador de centro de costo');})();
 
 /* ===== Datos paginados + Tabla/Kanban ===== */
 (function(){
@@ -243,38 +373,246 @@ s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.
   const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),fMetaEl=$('fMeta'),fActEl=$('fAct'),sortEl=$('sort'),perPageEl=$('perPage');
   const vTable=$('viewTable'),vKanban=$('viewKanban'),theadEl=$('thead'),tbodyEl=$('tbody'),tfootEl=$('tfoot');
   const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:'<?= htmlspecialchars($fMeta) ?>',act:'<?= htmlspecialchars($fAct) ?>',fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
-  let mode='table', last={rows:[],total:0,summary:[]};
+  let mode='table', agrupar=true, prevSort='mod_desc', last={rows:[],total:0,summary:[]};
+
+  /* ═══════════════ SELECTOR DE CAMPOS ═══════════════
+     Columnas virtuales (__) + columnas reales de ExportService::HEADERS.
+     El orden de la tabla siempre respeta el orden original de HEADERS. */
+  const VCOL={__FASE:'Indicador de fase',__CMN:'Estado CMN'};
+  const ALLC=[...Object.keys(VCOL),...HKEYS];
+  const LBL=k=>VCOL[k]||HEADERS[k]||k;
+  const LS_COLS='siga.cols.v1';
+
+  function GRUPO(k){
+    if(k.startsWith('__')||/^ESTADO/.test(k))                      return 'Estado y seguimiento';
+    if(/^IMPORTE|^PRECIO|^CANT|DIFERENCIA|^SALDO/.test(k))         return 'Montos y cantidades';
+    if(/^CCOSTO|^META|^ACTIV|^FUENTE|^RUBRO/.test(k))              return 'Organización';
+    if(/BIEN|ITEM|CLASIF|UNIDAD|TIPO|GRUPO|CLASE|FAMILIA/.test(k)) return 'Identificación del ítem';
+    if(/ORDEN|PROVE|CERT|SIAF|DOC|FECHA/.test(k))                  return 'Ejecución';
+    return 'Otros campos';
+  }
+  const PRE={
+    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','NOMBRE_ITEM','UNIDAD_MEDIDA'].includes(k)
+                                || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
+    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD'].includes(k)
+                                || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
+    completo  :()=>ALLC.slice()
+  };
+
+  let VIS=new Set();
+  (function(){
+    let s=null; try{s=JSON.parse(localStorage.getItem(LS_COLS)||'null');}catch(e){}
+    const base=(Array.isArray(s)&&s.length)?s.filter(k=>ALLC.includes(k)):PRE.trabajo();
+    VIS=new Set(base.length>=2?base:ALLC);
+  })();
+  const COLS=()=>ALLC.filter(k=>VIS.has(k));
+  function saveCols(){try{localStorage.setItem(LS_COLS,JSON.stringify([...VIS]));}catch(e){}}
+
+  const colPanel=$('colPanel');
+  function colBadge(){$('colCount').textContent=COLS().length+'/'+ALLC.length;}
+
+  function renderColPanel(filtro){
+    const f=(filtro||'').trim().toLowerCase(), g={};
+    ALLC.forEach(k=>{
+      if(f && !LBL(k).toLowerCase().includes(f) && !k.toLowerCase().includes(f))return;
+      (g[GRUPO(k)]=g[GRUPO(k)]||[]).push(k);
+    });
+    const lista=Object.keys(g).map(gr=>
+        '<div class="px-3 pt-3">'
+       +'<div class="flex items-center justify-between mb-0.5">'
+         +'<p class="text-[10px] font-bold uppercase tracking-widest text-gray-400">'+ec(gr)+'</p>'
+         +'<button type="button" data-gall="'+ec(gr)+'" class="text-[10px] font-semibold text-primary-dark hover:underline">alternar</button>'
+       +'</div>'
+       +g[gr].map(k=>
+          '<label class="flex items-center gap-2.5 py-1.5 px-1 rounded-md hover:bg-gray-50 cursor-pointer">'
+         +'<input type="checkbox" class="colChk accent-primary" value="'+ec(k)+'"'+(VIS.has(k)?' checked':'')+'>'
+         +'<span class="text-[12px] text-gray-700 leading-tight">'+ec(LBL(k))+'</span></label>').join('')
+       +'</div>').join('')
+      || '<p class="p-6 text-center text-xs text-gray-400">Ningún campo coincide</p>';
+
+    colPanel.innerHTML=
+       '<div class="px-3 py-2.5 border-b border-gray-100">'
+      +'<div class="flex items-center justify-between mb-2">'
+        +'<p class="text-[11px] font-bold uppercase tracking-wide text-gray-600">Campos visibles</p>'
+        +'<button type="button" id="colClose" class="text-gray-400 hover:text-gray-600 text-xs">✕</button></div>'
+      +'<input id="colQ" type="text" placeholder="Buscar campo…" value="'+ec(f)+'" '
+        +'class="w-full px-2.5 py-1.5 text-[12px] border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-primary">'
+      +'<div class="flex gap-1 mt-2">'
+        +'<button type="button" data-pre="trabajo"    class="flex-1 px-2 py-1 text-[10px] font-semibold rounded border border-gray-200 hover:bg-gray-50">Trabajo</button>'
+        +'<button type="button" data-pre="financiero" class="flex-1 px-2 py-1 text-[10px] font-semibold rounded border border-gray-200 hover:bg-gray-50">Financiero</button>'
+        +'<button type="button" data-pre="completo"   class="flex-1 px-2 py-1 text-[10px] font-semibold rounded border border-gray-200 hover:bg-gray-50">Completo</button>'
+      +'</div></div>'
+      +'<div class="max-h-[45vh] overflow-y-auto pb-2">'+lista+'</div>'
+      +'<div class="px-3 py-2 border-t border-gray-100 flex items-center justify-between bg-gray-50">'
+        +'<span class="text-[10px] text-gray-500">'+COLS().length+' de '+ALLC.length+' campos</span>'
+        +'<button type="button" data-pre="trabajo" class="text-[11px] font-semibold text-gray-500 hover:text-gray-700">Restablecer</button>'
+      +'</div>';
+    const qi=$('colQ'); if(f){qi.focus();qi.setSelectionRange(f.length,f.length);}
+  }
+
+  function aplicarCols(){saveCols();colBadge();updateExport();paint();}
+
+  $('btnCols').addEventListener('click',e=>{
+    e.stopPropagation();
+    if(!colPanel.classList.contains('hidden')){colPanel.classList.add('hidden');return;}
+    renderColPanel('');colPanel.classList.remove('hidden');
+  });
+  colPanel.addEventListener('click',e=>{
+    e.stopPropagation();
+    const chk=e.target.closest('.colChk');
+    if(chk){ chk.checked?VIS.add(chk.value):VIS.delete(chk.value);
+      if(!COLS().length){VIS.add(chk.value);chk.checked=true;return;}
+      aplicarCols(); renderColPanel($('colQ').value); return; }
+    const pre=e.target.closest('[data-pre]');
+    if(pre){ VIS=new Set(PRE[pre.dataset.pre]()); aplicarCols(); renderColPanel($('colQ').value); return; }
+    const gall=e.target.closest('[data-gall]');
+    if(gall){ const gr=gall.dataset.gall, ks=ALLC.filter(k=>GRUPO(k)===gr);
+      const todos=ks.every(k=>VIS.has(k));
+      ks.forEach(k=>todos?VIS.delete(k):VIS.add(k));
+      if(!COLS().length)VIS=new Set(PRE.trabajo());
+      aplicarCols(); renderColPanel($('colQ').value); return; }
+    if(e.target.id==='colClose')colPanel.classList.add('hidden');
+  });
+  colPanel.addEventListener('input',e=>{ if(e.target.id==='colQ')renderColPanel(e.target.value); });
+  document.addEventListener('click',()=>colPanel.classList.add('hidden'));
+  document.addEventListener('keydown',e=>{ if(e.key==='Escape')colPanel.classList.add('hidden'); });
+  colBadge();
+  /* ═══════════════ fin selector de campos ═══════════════ */
 
   function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta,act:st.act,fase:st.fase,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
-  function updateExport(){$('expExcel').href='?'+params({export:'excel'}).toString();$('expPdf').href='?'+params({export:'pdf'}).toString();}
+  function updateExport(){
+    const cx={cols:COLS().filter(k=>!k.startsWith('__')).join(',')};
+    $('expExcel').href='?'+params(Object.assign({export:'excel'},cx)).toString();
+    $('expPdf').href  ='?'+params(Object.assign({export:'pdf'  },cx)).toString();
+  }
 
   /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada O/C u O/S. */
   function badge(estado){return (estado||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{const e=p.toUpperCase();let c='bg-gray-100 text-gray-600';if(e.includes('DEVENGADO'))c='bg-primary/15 text-primary-dark';else if(e.includes('COMPROMETIDO'))c='bg-secondary/15 text-secondary-dark';else if(e.includes('CERTIFICADO'))c='bg-warning/20 text-yellow-700';else if(e.includes('PENDIENTE'))c='bg-gray-100 text-gray-500';return '<span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] '+c+'">'+ec(p)+'</span>';}).join(' ');}
-  /* Estado de línea del CMN (columna Incl/Excl del SIGA): C=Aprobado, I=Incluido. */
+  /* Estado de línea del CMN: ANTIGUO (base) · INCLUIDO · EXCLUIDO · MODIFICADO. */
+  const CMN_EST={
+    'ANTIGUO'   :['Antiguo'   ,'bg-gray-100 text-gray-600 border-gray-300' ,'Ya venía en el cuadro base aprobado'],
+    'INCLUIDO'  :['Incluido'  ,'bg-blue-100 text-blue-800 border-blue-300' ,'Añadido después por modificación (I)'],
+    'EXCLUIDO'  :['Excluido'  ,'bg-red-100 text-red-800 border-red-300'    ,'Alguna línea del ítem fue retirada (E)'],
+    'MODIFICADO':['Modificado','bg-amber-100 text-amber-800 border-amber-300','El importe vigente cambió respecto del original']};
   function cmnBadge(d){const s=(d.ESTADO_CMN||'');if(!s)return'';
-    const map={'APROBADO':['C','bg-gray-200 text-gray-700 border border-gray-300'],'INCLUIDO':['I','bg-amber-100 text-amber-800 border border-amber-300'],'BASE':['·','bg-gray-100 text-gray-500 border border-gray-200']};
-    let out=s.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const m=map[x]||[x,'bg-gray-100 text-gray-600'];
-      return '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold '+m[1]+'" title="Estado CMN: '+x.toLowerCase()+'">'+m[0]+' · '+(x==='APROBADO'?'Aprobado':x==='INCLUIDO'?'Incluido':x)+'</span>';}).join(' ');
-    if(+d.NRO_LINEAS>1)out+=' <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-violet-100 text-violet-700 border border-violet-300" title="Este ítem agrupa '+d.NRO_LINEAS+' líneas del cuadro">×'+d.NRO_LINEAS+'</span>';
+    let out=s.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const m=CMN_EST[x]||[x,'bg-gray-100 text-gray-600 border-gray-300',''];
+      return '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border '+m[1]+'" title="'+m[2]+'">'+m[0]+'</span>';}).join(' ');
+    if(+d.NRO_LINEAS>1)out+=' <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border bg-violet-100 text-violet-700 border-violet-300" title="Agrupa '+d.NRO_LINEAS+' líneas del cuadro">×'+d.NRO_LINEAS+'</span>';
     return out;}
+  /* Color estable por actividad operativa (para el agrupado). */
+  const ACT_PAL=[['#059669','#ecfdf5'],['#0284c7','#eff6ff'],['#6d28d9','#f5f3ff'],['#b45309','#fffbeb'],['#dc2626','#fef2f2'],['#0f766e','#f0fdfa'],['#a21caf','#fdf4ff'],['#4d7c0f','#f7fee7']];
+  function actColor(cod){let h=0;const s=(cod||'').toString();for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return ACT_PAL[h%ACT_PAL.length];}
 
-  function renderChips(sum){const map={};let tc=0,tm=0;sum.forEach(s=>{map[s.fase]={c:+s.c,m:+s.monto};tc+=+s.c;tm+=+s.monto;});chipsEl.innerHTML='';
-    chipsEl.appendChild(chip('Todos',tc,tm,'bg-gray-800 text-white','ring-gray-800',st.fase==='',()=>{st.fase='';st.page=1;load();}));
-    FASES.forEach(f=>{const g=map[f.key]||{c:0,m:0};chipsEl.appendChild(chip(f.label,g.c,g.m,f.chip,f.ring,st.fase===f.key,()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot));});}
-  function chip(label,count,monto,cls,ring,active,onclick,dot){const b=document.createElement('button');b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all '+cls+(active?(' ring-2 ring-offset-1 '+ring):' opacity-90 hover:opacity-100');b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full '+dot+'"></span>':'')+'<span>'+label+'</span><span class="opacity-60">·</span><span>'+count+'</span><span class="opacity-60">S/ '+money(monto)+'</span>';b.onclick=onclick;return b;}
+  /* Los chips muestran los MISMOS totales que las columnas de la tabla:
+       Programado = Σ IMPORTE_PROG · Modificado = Σ IMPORTE_MOD · Ejecutado = Σ IMPORTE_EJEC
+     (totales del centro, no la porción de cada fase). El número junto al chip
+     es la cantidad de ítems en esa fase, que es lo que filtra al hacer clic. */
+  function renderChips(sum){
+    const map={};let tc=0,tProg=0,tMod=0,tEjec=0;
+    sum.forEach(s=>{map[s.fase]={c:+s.c};tc+=+s.c;tProg+=+s.prog;tMod+=+s.monto;tEjec+=+s.ejec;});
+    const TOT={PROGRAMADO:tProg,MODIFICADO:tMod,EJECUTADO:tEjec};
+    chipsEl.innerHTML='';
+    chipsEl.appendChild(chip('Todos',tc,tMod,'bg-gray-800 text-white','ring-gray-800',st.fase==='',
+      ()=>{st.fase='';st.page=1;load();},null,
+      'Importe vigente total S/ '+money(tMod)+'  ·  Ejecutado S/ '+money(tEjec)));
+    FASES.forEach(f=>{const g=map[f.key]||{c:0};
+      const tip=(f.key==='PROGRAMADO'?'Total programado en el cuadro aprobado'
+               :f.key==='MODIFICADO'?'Total vigente del cuadro modificado'
+               :'Total efectivamente ejecutado')+'  ·  '+g.c+' ítems en esta fase (clic para filtrar)';
+      chipsEl.appendChild(chip(f.label,g.c,TOT[f.key],f.chip,f.ring,st.fase===f.key,
+        ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});}
+
+  function chip(label,count,monto,cls,ring,active,onclick,dot,tip){const b=document.createElement('button');if(tip)b.title=tip;b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all '+cls+(active?(' ring-2 ring-offset-1 '+ring):' opacity-90 hover:opacity-100');b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full '+dot+'"></span>':'')+'<span>'+label+'</span><span class="opacity-60">·</span><span>'+count+'</span><span class="opacity-60">S/ '+money(monto)+'</span>';b.onclick=onclick;return b;}
+
+  const colapsados=new Set();
+  /* Fila de totales alineada bajo las columnas de importe visibles (estilo SIGA). */
+  function rowTotales(label,sP,sM,sE,sD,opt){
+    const o=opt||{}, cols=COLS();
+    const MAP={IMPORTE_PROG:sP,IMPORTE_MOD:sM,IMPORTE_EJEC:sE,DIFERENCIA:sD};
+    let first=cols.findIndex(k=>k in MAP); if(first<0)first=cols.length;
+    let c='<td colspan="'+Math.max(1,first)+'" class="px-3 py-1.5 text-right '+(o.lblCls||'')+'" style="'+(o.lblStyle||'')+'">'+label+'</td>';
+    for(let i=first;i<cols.length;i++){const k=cols[i];const val=(k in MAP)?MAP[k]:null;
+      c+= val===null ? '<td class="py-1.5"></td>'
+        : '<td class="px-2 py-1.5 text-right tabular-nums '+(k==='DIFERENCIA'&&val<-0.005?'text-red-600':'')+'">'+money(val)+'</td>';}
+    return '<tr class="'+(o.trCls||'')+'" style="'+(o.trStyle||'')+'">'+c+'</tr>';
+  }
 
   function renderTable(rows){
-    theadEl.innerHTML='<th class="px-2 py-2 w-6"></th>'+HKEYS.map(k=>'<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'">'+ec(HEADERS[k])+'</th>').join('');
-    tbodyEl.innerHTML=rows.length?rows.map((d,idx)=>{const f=FMAP[faseKey(d)];const tint=f.tint||'bg-white';
-      const at='data-idx="'+idx+'" data-cc="'+ec(d.CCOSTO_COD)+'" data-t="'+ec(d.TIPO_BIEN)+'" data-g="'+ec(d.GRUPO_BIEN)+'" data-c="'+ec(d.CLASE_BIEN)+'" data-f="'+ec(d.FAMILIA_BIEN)+'" data-it="'+ec(d.ITEM_BIEN)+'" data-meta="'+ec(d.META)+'" data-clasif="'+ec(d.CLASIF_COD)+'"';
-      return '<tr class="'+tint+' hover:brightness-95 cursor-pointer trow" '+at+'><td class="px-2 py-1 text-gray-400" title="Ver trazabilidad">▸</td>'
-        +HKEYS.map(k=>k==='ESTADO_ORDEN'?'<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+badge(d[k])+'</div></td>':k==='DIFERENCIA'?'<td class="px-2 py-1 text-right tabular-nums font-semibold '+((+d[k])<-0.005?'text-red-600':'text-primary-dark')+'">'+money(d[k])+'</td>':NUM.has(k)?'<td class="px-2 py-1 text-right tabular-nums">'+money(d[k])+'</td>':'<td class="px-2 py-1">'+ec(d[k])+'</td>').join('')+'</tr>';
-    }).join(''):'<tr><td colspan="'+(HKEYS.length+1)+'" class="px-3 py-6 text-center text-gray-400">Sin resultados</td></tr>';
-    const tP=rows.reduce((s,d)=>s+ +d.IMPORTE_PROG,0),tM=rows.reduce((s,d)=>s+ +d.IMPORTE_MOD,0),tE=rows.reduce((s,d)=>s+ +d.IMPORTE_EJEC,0),tD=rows.reduce((s,d)=>s+ +d.DIFERENCIA,0);
-    const iP=HKEYS.indexOf('IMPORTE_PROG')+1;let cells='<td colspan="'+iP+'" class="px-2 py-2 text-right">SUBTOTAL PÁGINA</td>';
-    for(let i=iP-1;i<HKEYS.length;i++){const k=HKEYS[i];cells+=k==='IMPORTE_PROG'?'<td class="px-2 py-2 text-right tabular-nums">'+money(tP)+'</td>':k==='IMPORTE_MOD'?'<td class="px-2 py-2 text-right tabular-nums">'+money(tM)+'</td>':k==='IMPORTE_EJEC'?'<td class="px-2 py-2 text-right tabular-nums">'+money(tE)+'</td>':k==='DIFERENCIA'?'<td class="px-2 py-2 text-right tabular-nums text-primary-dark">'+money(tD)+'</td>':'<td></td>';}
-    tfootEl.innerHTML='<tr class="bg-gray-100 font-bold text-gray-700">'+cells+'</tr>';
+    const cols=COLS(), nCols=Math.max(1,cols.length);
+    theadEl.innerHTML=cols.map(k=>
+        k==='__FASE' ? '<th class="px-2 py-2 w-6"></th>'
+      : k==='__CMN'  ? '<th class="px-2 py-2 font-semibold text-left">ESTADO CMN</th>'
+      : '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'">'+ec(HEADERS[k])+'</th>').join('');
+    if(!rows.length){tbodyEl.innerHTML='<tr><td colspan="'+nCols+'" class="px-3 py-6 text-center text-gray-400">Sin resultados</td></tr>';tfootEl.innerHTML='';return;}
+
+    const codBien=d=>[d.GRUPO_BIEN,d.CLASE_BIEN,d.FAMILIA_BIEN,d.ITEM_BIEN].map(x=>(x||'').toString()).join('');
+    /* Fila de ítem. Dentro de un bloque toma el color del grupo: fondo tintado
+       alternado, riel izquierdo y hairline del mismo tono → jerarquía visual. */
+    const tr1=(d,idx,c,par)=>{
+      const dentro=!!c;
+      const bg   = dentro ? (par? c[0]+'12' : c[0]+'08') : 'transparent';
+      const style= dentro
+        ? 'background:'+bg+';box-shadow:inset 5px 0 0 '+c[0]+'80;border-bottom:1px solid '+c[0]+'1f;'
+        : '';
+      const f=FMAP[faseKey(d)];
+      const cells=cols.map((k,ci)=>{
+        if(k==='__FASE') return '<td class="py-1 text-center '+(dentro&&ci===0?'pl-4 pr-1':'px-2')+'" title="'+f.label+'">'
+                               +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
+        if(k==='__CMN')  return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
+        if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
+        if(k==='DIFERENCIA') return '<td class="px-2 py-1 text-right tabular-nums font-semibold '+((+d[k])<-0.005?'text-red-600':'text-gray-700')+'">'+money(d[k])+'</td>';
+        return NUM.has(k)
+          ? '<td class="px-2 py-1 text-right tabular-nums">'+money(d[k])+'</td>'
+          : '<td class="px-2 py-1">'+ec(d[k])+'</td>';
+      }).join('');
+      return '<tr class="itemrow cursor-pointer trow'+(dentro?'':' bg-white hover:bg-gray-50')+'" style="'+style+'" data-idx="'+idx+'">'+cells+'</tr>';
+    };
+
+    let html='';
+    if(agrupar){
+      const g={};rows.forEach((d,i)=>{const k=d.ACTIV_OPERAT_COD||'—';(g[k]=g[k]||[]).push({d,i});});
+      const keys=Object.keys(g).sort();
+      keys.forEach((k,gi)=>{
+        const items=g[k].sort((a,b)=>codBien(a.d)<codBien(b.d)?-1:codBien(a.d)>codBien(b.d)?1:0);
+        const c=actColor(k), cerrado=colapsados.has(k);
+        const sP=items.reduce((s,x)=>s+ +x.d.IMPORTE_PROG,0),sM=items.reduce((s,x)=>s+ +x.d.IMPORTE_MOD,0),
+              sE=items.reduce((s,x)=>s+ +x.d.IMPORTE_EJEC,0),sD=items.reduce((s,x)=>s+ +x.d.DIFERENCIA,0);
+        const pct=sM>0?Math.min(100,sE/sM*100):0;
+
+        /* separador entre bloques */
+        if(gi)html+='<tr><td colspan="'+nCols+'" class="p-0"><div style="height:10px;background:#f8fafc"></div></td></tr>';
+
+        /* CABECERA DEL BLOQUE: color sólido, texto blanco (nivel 1) */
+        html+='<tr class="ghead cursor-pointer select-none" data-act="'+ec(k)+'"><td colspan="'+nCols+'" class="p-0">'
+          +'<div class="flex items-center gap-2.5 px-2.5 py-2 text-white" style="background:'+c[0]+'">'
+            +'<span class="text-[11px] w-3 shrink-0 opacity-90">'+(cerrado?'▶':'▼')+'</span>'
+            +'<span class="px-2 py-0.5 rounded-sm text-[10px] font-black tracking-widest shrink-0" style="background:rgba(255,255,255,.22)">'+ec(k)+'</span>'
+            +'<span class="text-[12px] font-bold truncate uppercase tracking-wide">'+ec(items[0].d.ACTIV_OPERAT_NOMBRE||'Sin actividad')+'</span>'
+            +'<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style="background:rgba(255,255,255,.9);color:'+c[0]+'">'+items.length+' ítems</span>'
+            +'<div class="ml-auto flex items-center gap-2 shrink-0">'
+              +'<div class="w-24 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,255,255,.3)"><div class="h-full rounded-full bg-white" style="width:'+pct+'%"></div></div>'
+              +'<span class="text-[11px] font-black tabular-nums w-12 text-right">'+pct.toFixed(1)+'%</span>'
+            +'</div>'
+          +'</div></td></tr>';
+
+        if(!cerrado){
+          items.forEach((x,ri)=>{html+=tr1(x.d,x.i,c,ri%2===1);});
+          /* PIE DEL BLOQUE: subtotal alineado, cierra el bloque (nivel 2) */
+          html+=rowTotales('Sub Total  ·  '+ec(k),sP,sM,sE,sD,{
+            trCls:'gsub font-bold text-[11px]',
+            trStyle:'background:'+c[0]+'26;box-shadow:inset 5px 0 0 '+c[0]+';border-top:2px solid '+c[0]+';border-bottom:2px solid '+c[0]+'59;color:'+c[0],
+            lblCls:'uppercase'});
+        }
+      });
+    } else rows.forEach((d,i)=>{html+=tr1(d,i,null,false);});
+    tbodyEl.innerHTML=html;
+
+    const tP=rows.reduce((s,d)=>s+ +d.IMPORTE_PROG,0),tM=rows.reduce((s,d)=>s+ +d.IMPORTE_MOD,0),
+          tE=rows.reduce((s,d)=>s+ +d.IMPORTE_EJEC,0),tD=rows.reduce((s,d)=>s+ +d.DIFERENCIA,0);
+    tfootEl.innerHTML=rowTotales('TOTAL PÁGINA',tP,tM,tE,tD,{
+      trCls:'bg-gray-800 text-white font-bold',lblCls:'tracking-widest text-[11px]'});
   }
+
   function renderKanban(rows){vKanban.innerHTML='';const vis=st.fase?FASES.filter(f=>f.key===st.fase):FASES;
     vis.forEach(f=>{const g=[];rows.forEach((d,i)=>{if(faseKey(d)===f.key)g.push({d,i});});const monto=g.reduce((s,x)=>s+ +x.d.IMPORTE_MOD,0);
       const col=document.createElement('div');col.className='flex-shrink-0 w-72 bg-gray-100/70 rounded-xl flex flex-col max-h-[calc(100vh-360px)]';
@@ -288,15 +626,33 @@ s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.
   function paint(){if(mode==='table'){vTable.classList.remove('hidden');vKanban.classList.add('hidden');renderTable(last.rows);}else{vKanban.classList.remove('hidden');vTable.classList.add('hidden');renderKanban(last.rows);}}
   function renderPager(){const t=last.total,pp=st.perPage,from=t?((st.page-1)*pp+1):0,to=Math.min(t,st.page*pp),pages=Math.max(1,Math.ceil(t/pp));
     $('totLbl').textContent=t+' ítems';$('pageInfo').textContent=from+'–'+to+' de '+t;$('pageNum').textContent='Pág. '+st.page+' / '+pages;
-    $('prev').disabled=st.page<=1;$('next').disabled=st.page>=pages;}
+    $('prev').disabled=st.page<=1;$('next').disabled=st.page>=pages;
+    const ft=$('fsTot'); if(ft) ft.textContent=$('pageInfo').textContent;}
+
+  /* ── Loader ─────────────────────────────────── */
+  let loadT=null;
+  function showLoad(){$('loadBar').classList.add('on');
+    clearTimeout(loadT);loadT=setTimeout(()=>$('loadOv').classList.add('on'),260);}
+  function hideLoad(){clearTimeout(loadT);$('loadBar').classList.remove('on');$('loadOv').classList.remove('on');}
+  function skeleton(){const nc=Math.max(1,COLS().length);let h='';
+    for(let r=0;r<8;r++){h+='<tr>';for(let i=0;i<nc;i++){const w=i<2?'60%':(i%3===0?'80%':'55%');
+      h+='<td class="px-2 py-2"><div class="skl" style="width:'+w+';animation-delay:'+(r*.06)+'s"></div></td>';}h+='</tr>';}
+    tbodyEl.innerHTML=h;tfootEl.innerHTML='';}
 
   async function load(){
-    tbodyEl.innerHTML='<tr><td colspan="'+(HKEYS.length+1)+'" class="px-3 py-6 text-center text-gray-400">Cargando…</td></tr>';
+    showLoad();skeleton();
     updateExport();
-    try{const r=await fetch('?'+params({action:'data'}).toString());const j=await r.json();
-      if(j.error){tbodyEl.innerHTML='<tr><td colspan="'+(HKEYS.length+1)+'" class="px-3 py-6 text-center text-red-600">'+ec(j.error)+'</td></tr>';return;}
+    try{
+      const r=await fetch('?'+params({action:'data'}).toString(),{credentials:'same-origin'});
+      /* Si la sesión venció, Auth redirige al login y llega HTML: se detecta por
+         el content-type para no reventar en el JSON.parse. */
+      const ct=(r.headers.get('content-type')||'');
+      if(r.redirected || !ct.includes('json')){ location.href='login.php?next=index.php'; return; }
+      const j=await r.json();
+      if(j.error){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-triangle-exclamation text-red-500 mr-1"></i><span class="text-red-600">'+ec(j.error)+'</span></td></tr>';tfootEl.innerHTML='';return;}
       last=j;renderChips(j.summary);paint();renderPager();
-    }catch(e){tbodyEl.innerHTML='<tr><td colspan="'+(HKEYS.length+1)+'" class="px-3 py-6 text-center text-red-600">Error de red</td></tr>';}
+    }catch(e){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-plug-circle-xmark text-red-500 mr-1"></i><span class="text-red-600">Error de red</span></td></tr>';tfootEl.innerHTML='';}
+    finally{hideLoad();}
   }
 
   /* ===== MODAL DE TRAZABILIDAD · Expediente formal ===== */
@@ -322,13 +678,16 @@ s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.
     setTab('resumen');hmOpen();
     let h=histCache[key];
     if(!h){const p=new URLSearchParams({resource:'cmn',anio:ANIO,action:'historial',cc:d.CCOSTO_COD,t:d.TIPO_BIEN,g:d.GRUPO_BIEN,c:d.CLASE_BIEN,f:d.FAMILIA_BIEN,it:d.ITEM_BIEN,meta:d.META,clasif:d.CLASIF_COD});
-      try{h=await(await fetch('?'+p.toString())).json();histCache[key]=h;}
+      try{h=await(await fetch('?'+p.toString(),{credentials:'same-origin'})).json();histCache[key]=h;}
       catch(x){$('hmResumen').innerHTML='<p class="text-xs text-red-600">No se pudo cargar el expediente.</p>';return;}}
     if(h.error){$('hmResumen').innerHTML='<p class="text-xs text-red-600">'+ec(h.error)+'</p>';return;}
     $('hmResumen').innerHTML=renderResumen(h,d);
     $('hmKardex').innerHTML=renderKardex(h,d);
   }
-  tbodyEl.addEventListener('click',e=>{const tr=e.target.closest('.trow');if(tr)openHist(tr);});
+  tbodyEl.addEventListener('click',e=>{
+    const gh=e.target.closest('.ghead');
+    if(gh){const k=gh.dataset.act;if(colapsados.has(k))colapsados.delete(k);else colapsados.add(k);paint();return;}
+    const tr=e.target.closest('.trow');if(tr)openHist(tr);});
   vKanban.addEventListener('click',e=>{const kc=e.target.closest('.kcard');if(kc)openHist(kc);});
 
   /* — utilitarios del expediente — */
@@ -481,13 +840,47 @@ s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.
   fTipoEl.addEventListener('change',()=>{st.tipo=fTipoEl.value;st.page=1;load();});
   fMetaEl.addEventListener('change',()=>{st.meta=fMetaEl.value;st.page=1;load();});
   fActEl.addEventListener('change',()=>{st.act=fActEl.value;st.page=1;load();});
-  sortEl.addEventListener('change',()=>{st.sort=sortEl.value;st.page=1;load();});
+  sortEl.addEventListener('change',()=>{st.sort=sortEl.value;if(st.sort==='act_item'){agrupar=true;$('agrupar').checked=true;}st.page=1;load();});
+  $('gExpand').addEventListener('click',()=>{colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}paint();});
+  $('gCollapse').addEventListener('click',()=>{if(!agrupar){agrupar=true;$('agrupar').checked=true;}
+    last.rows.forEach(d=>colapsados.add(d.ACTIV_OPERAT_COD||'—'));paint();});
+  $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;st.page=1;load();});
   perPageEl.addEventListener('change',()=>{st.perPage=+perPageEl.value;st.page=1;load();});
+  /* pantalla completa de la tabla */
+  function toggleFs(on){
+    const t=$('viewTable'), b=$('btnFs').querySelector('i');
+    const fs = on===undefined ? !t.classList.contains('fs') : on;
+    t.classList.toggle('fs',fs);
+    document.body.classList.toggle('fsOn',fs);
+    b.className = fs ? 'fa-solid fa-compress' : 'fa-solid fa-expand';
+    if(fs && mode!=='table') setMode('table');
+    $('fsTot').textContent = $('pageInfo').textContent;
+  }
+  $('btnFs').addEventListener('click',()=>toggleFs());
+  $('fsExit').addEventListener('click',()=>toggleFs(false));
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Escape' && document.body.classList.contains('fsOn') && $('histModal').classList.contains('hidden')) toggleFs(false);});
+
   $('prev').addEventListener('click',()=>{if(st.page>1){st.page--;load();}});
   $('next').addEventListener('click',()=>{st.page++;load();});
 
+  /* ── Acciones de ESTA pantalla en la paleta Ctrl+K ──
+     accesos.php se incluye antes de este script, así que SIGA.accion existe. */
+  if(window.SIGA&&SIGA.accion){
+    SIGA.accion('Exportar a Excel','fa-file-excel',()=>{updateExport();$('expExcel').click();},'Descarga el CMN con los filtros y campos actuales');
+    SIGA.accion('Exportar a PDF','fa-file-pdf',()=>{updateExport();window.open($('expPdf').href,'_blank');},'Abre el PDF con los filtros y campos actuales');
+    SIGA.accion('Pantalla completa','fa-expand',()=>toggleFs(true),'Tabla a pantalla completa (Esc para salir)');
+    SIGA.accion('Vista tabla','fa-table-list',()=>setMode('table'),'Cambia a la vista de tabla');
+    SIGA.accion('Vista kanban','fa-table-columns',()=>setMode('kanban'),'Cambia a la vista kanban por estado');
+    SIGA.accion('Elegir campos visibles','fa-list-check',()=>$('btnCols').click(),'Abre el selector de columnas');
+    SIGA.accion('Buscar ítem','fa-magnifying-glass',()=>{qEl.focus();qEl.select();},'Enfoca el buscador de ítems');
+    SIGA.accion('Expandir todas las actividades','fa-up-right-and-down-left-from-center',()=>$('gExpand').click(),'Abre todos los bloques del agrupado');
+    SIGA.accion('Contraer todas las actividades','fa-down-left-and-up-right-to-center',()=>$('gCollapse').click(),'Cierra todos los bloques del agrupado');
+  }
+
   // set selects a estado inicial
   sortEl.value=st.sort; perPageEl.value=st.perPage;
+  agrupar=(st.sort==='act_item');$('agrupar').checked=agrupar;
   setMode('table'); load();
 })();
 </script>
