@@ -10,14 +10,35 @@
  * Es idempotente: puede incluirse varias veces sin errores de redeclaración,
  * porque Auth.php y las vistas lo van a pedir por su cuenta.
  *
- * El archivo .env NO se versiona (ver .gitignore). Cada máquina tiene el suyo,
- * copiado de .env.example.
+ * ── DÓNDE VA EL .env (estilo Laravel) ────────────────────────────────
+ * El .env se busca en este orden y gana el primero que exista:
+ *
+ *   1. UN NIVEL ARRIBA de esta carpeta   ← RECOMENDADO en el servidor
+ *   2. En esta misma carpeta             ← cómodo para desarrollo local
+ *
+ * En el hosting, sube los archivos de la app a public_html/ y el .env
+ * al costado (NO adentro):
+ *
+ *     /home/usuario/
+ *     ├── .env               ← aquí: Apache no puede servirlo NUNCA,
+ *     │                        porque está fuera del webroot
+ *     └── public_html/
+ *         ├── index.php
+ *         ├── dashboard.php
+ *         ├── .htaccess      ← segunda capa de protección
+ *         └── …
+ *
+ * Así no importa la configuración de Apache ni ningún comando: un archivo
+ * que no está bajo el DocumentRoot simplemente no tiene URL.
+ *
+ * El archivo .env NO se versiona (ver .gitignore). Cada máquina tiene el
+ * suyo, copiado de .env.example.
  */
 
 if (defined('SIGA_CONFIG_CARGADO')) return;
 define('SIGA_CONFIG_CARGADO', true);
 
-/* ── Lector de .env ─────────────────────────────────────────────
+/* ── Lector de .env ──────────────────────────────────────────────────
    Formato admitido:   CLAVE=valor
                        CLAVE="valor con espacios"
                        # comentario de línea
@@ -28,12 +49,15 @@ if (!class_exists('Env')) {
         private static array $vars = [];
         private static bool  $cargado = false;
 
-        public static function cargar(string $ruta): void
+        /** Carga el PRIMER .env legible de la lista de rutas. */
+        public static function cargar(string ...$rutas): void
         {
             if (self::$cargado) return;
             self::$cargado = true;
 
-            if (!is_readable($ruta)) return;   // sin .env se usan los valores por defecto
+            $ruta = null;
+            foreach ($rutas as $r) { if (is_readable($r)) { $ruta = $r; break; } }
+            if ($ruta === null) return;   // sin .env se usan los valores por defecto
 
             foreach (file($ruta, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $linea) {
                 $linea = trim($linea);
@@ -75,9 +99,13 @@ if (!class_exists('Env')) {
     }
 }
 
-Env::cargar(__DIR__ . '/.env');
+/* Primero fuera del webroot (servidor); si no, junto a la app (desarrollo). */
+Env::cargar(
+    dirname(__DIR__) . '/.env',
+    __DIR__ . '/.env'
+);
 
-/* ── Base de datos ───────────────────────────────────────────────
+/* ── Base de datos ───────────────────────────────────────────────────
    DB_USER y DB_PASS vacíos = autenticación Windows (trusted connection),
    que es como está configurado el servidor del SIGA. */
 define('DB_SERVER', Env::get('DB_SERVER', 'localhost'));
@@ -85,12 +113,12 @@ define('DB_NAME',   Env::get('DB_NAME',   'SIGA_104'));
 define('DB_USER',   Env::get('DB_USER',   ''));
 define('DB_PASS',   Env::get('DB_PASS',   ''));
 
-/* ── Entidad ejecutora ──────────────────────────────────────────
+/* ── Entidad ejecutora ───────────────────────────────────────────────
    SEC_EJEC 104 = Universidad Nacional Agraria de la Selva. */
 define('SEC_EJEC',   Env::int('SEC_EJEC',   104));
 define('ANIO_PROG',  Env::int('ANIO_PROG',  (int)date('Y') + 1));
 
-/* ── Aplicación ─────────────────────────────────────────────────── */
+/* ── Aplicación ────────────────────────────────────────────────────── */
 define('APP_NOMBRE',     Env::get('APP_NOMBRE', 'SIGA · REPORTES'));
 define('APP_ENTIDAD',    Env::get('APP_ENTIDAD', 'Universidad Nacional Agraria de la Selva'));
 define('APP_DEBUG',      (bool)Env::get('APP_DEBUG', false));
@@ -98,9 +126,11 @@ define('CACHE_TTL',      Env::int('CACHE_TTL', 300));
 define('MAX_ROWS',       Env::int('MAX_ROWS', 100000));
 define('SESION_MINUTOS', Env::int('SESION_MINUTOS', 120));
 
-/* ── Errores ────────────────────────────────────────────────────
+/* ── Errores ─────────────────────────────────────────────────────────
    En producción nunca se muestran en pantalla: podrían filtrar la cadena
-   de conexión o nombres de tablas del SIGA. Se registran en el log. */
+   de conexión o nombres de tablas del SIGA. Se registran en el log.
+   El log también intenta vivir FUERA del webroot; si no puede, cae a
+   la carpeta local logs/ (que el .htaccess bloquea). */
 if (APP_DEBUG) {
     error_reporting(E_ALL);
     ini_set('display_errors', '1');
@@ -108,7 +138,7 @@ if (APP_DEBUG) {
     error_reporting(E_ALL);
     ini_set('display_errors', '0');
     ini_set('log_errors', '1');
-    $logDir = __DIR__ . '/logs';
+    $logDir = is_writable(dirname(__DIR__)) ? dirname(__DIR__) . '/siga-logs' : __DIR__ . '/logs';
     if (!is_dir($logDir)) @mkdir($logDir, 0775, true);
     ini_set('error_log', $logDir . '/php-error.log');
 }

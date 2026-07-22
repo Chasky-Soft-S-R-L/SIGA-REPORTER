@@ -1,0 +1,57 @@
+# ══════════════════════════════════════════════════════════════════
+#  .htaccess  ·  RAÍZ del proyecto SIGA-REPORTER
+#
+#  Este archivo va en la carpeta que CONTIENE a public_html, no dentro.
+#  Hace dos cosas:
+#
+#    1. Bloquea todo lo sensible de la raíz (.env, data/, info/, etc.)
+#    2. Redirige silenciosamente cualquier petición hacia public_html/
+#
+#  "Silenciosamente" significa que la URL que ve el usuario NO cambia:
+#      tudominio.pe/           →  sirve public_html/index.php
+#      tudominio.pe/login.php  →  sirve public_html/login.php
+#  La carpeta public_html nunca aparece en la barra de direcciones.
+#
+#  OJO: el nombre lleva 's' al final —> .htaccess  (no .htacces)
+# ══════════════════════════════════════════════════════════════════
+
+Options -Indexes
+DirectoryIndex index.php
+
+# ── 1. Nada de la raíz se sirve jamás ─────────────────────────────
+# El .env vive aquí. Aunque el rewrite de abajo ya lo protege, esto
+# es explícito: si mañana alguien toca las reglas, el .env sigue a salvo.
+<FilesMatch "^\.">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+<FilesMatch "\.(env|log|md|bak|old|sql|mdf|ldf|ini|sh|bat|ps1|yml|yaml|lock|dist|example)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# ── 2. Todo hacia public_html ─────────────────────────────────────
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Bloquear cualquier ruta con archivo o carpeta oculta
+  RewriteRule (^|/)\. - [F,L]
+
+  # Bloquear las carpetas privadas de la raíz
+  RewriteRule ^(data|info|logs|siga-logs|vendor)(/|$) - [F,L]
+
+  # Evitar bucle: si la petición ya viene con public_html, no reescribir
+  RewriteCond %{REQUEST_URI} !^/public_html/
+  RewriteRule ^(.*)$ public_html/$1 [L]
+</IfModule>

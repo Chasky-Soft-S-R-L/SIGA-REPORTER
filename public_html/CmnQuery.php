@@ -65,7 +65,7 @@ class CmnQuery
     /** SQL interno del reporte (sin ORDER BY ni paginado), reutilizable. */
     private function innerSql(bool $withCC): string
     {
-        $filtroCC = $withCC ? " AND CENTRO_COSTO = :ccosto " : "";
+        $filtroCC = $withCC ? " AND d.CENTRO_COSTO = :ccosto " : "";
         return "
         SELECT
             D.ANNO_PROG                                             AS PROGR_ANO_1,
@@ -83,16 +83,30 @@ class CmnQuery
             D.GRUPO_BIEN, D.CLASE_BIEN, D.FAMILIA_BIEN, D.ITEM_BIEN,
             cat.NOMBRE_ITEM                                         AS NOMBRE_ITEM,
             um.NOMBRE                                               AS UNIDAD_MEDIDA,
-            /* PROGRAMADO = solo lo APROBADO en el cuadro de necesidades. Ítems añadidos
-               después por modificación (estado I/IT) no existen en la necesidad =>
-               programado 0 (así cuadra con la Fase Consolidación y Aprobación del SIGA,
-               y la fase los clasifica como MODIFICADO). Servicios: 1 × importe. */
+            /* PROGRAMADO = solo lo APROBADO en el cuadro de necesidades, repartido
+               entre las actividades del ítem (ver OUTER APPLY tot). Los ítems añadidos
+               por modificación (I) no existen en la necesidad => programado 0.
+               Si el ítem está en UNA sola actividad se toma el importe exacto (sin
+               multiplicar, para no arrastrar decimales); si está en varias, se reparte
+               y se redondea a céntimos. Servicios: 1 × importe. */
             CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0 THEN 1 ELSE 0 END
-                 ELSE ISNULL(ori.CANT_TOTAL, 0) END                 AS CANTIDAD_PROG,
-            CASE WHEN D.TIPO_BIEN='S' THEN ISNULL(ori.MNTO_TOTAL, 0)
+                 WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.CANT_TOTAL, 0)
+                 ELSE ROUND(ISNULL(ori.CANT_TOTAL, 0)
+                      * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                             ELSE 1.0 / D.GRUPOS_ITEM END, 4)
+            END                                                     AS CANTIDAD_PROG,
+            CASE WHEN D.TIPO_BIEN='S'
+                 THEN CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                           ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                                * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                                       ELSE 1.0 / D.GRUPOS_ITEM END, 2) END
                  ELSE ISNULL(ori.PRECIO_UNIT, 0) END                AS PRECIO_UNIT_PROG,
-            ISNULL(ori.MNTO_TOTAL, 0)                               AS IMPORTE_PROG,
+            CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                 ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                      * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                             ELSE 1.0 / D.GRUPOS_ITEM END, 2)
+            END                                                     AS IMPORTE_PROG,
             CASE WHEN D.TIPO_BIEN='S' THEN 1 ELSE D.CANT_TOTAL END  AS CANTIDAD_MOD,
             /* MODIFICADO VIGENTE: fiel al CMN del SIGA (suma de sus líneas I + base).
                El precio real del consolidado PAAC NO altera esta columna; queda como
@@ -120,13 +134,29 @@ class CmnQuery
                          THEN ', MODIFICADO' ELSE '' END
                   , 1, 2, '')                                       AS ESTADO_CMN,
             D.NRO_LINEAS                                            AS NRO_LINEAS,
+            /* EJECUTADO repartido: el gasto se atribuye por centro+tarea+ítem, pero
+               una fila del reporte es centro+meta+clasificador+tarea+ítem. Si el mismo
+               ítem+tarea está en varias metas/clasificadores, sin repartir el importe
+               se contaría una vez por cada combinación (duplicando el ejecutado). */
             CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(dev.MNTO_DEV,0) > 0 THEN 1 ELSE 0 END
-                 ELSE ISNULL(dev.CANT_DEV, 0) END                   AS CANTIDAD_EJEC,
-            CASE WHEN D.TIPO_BIEN='S' THEN ISNULL(dev.MNTO_DEV, 0)
+                 WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.CANT_DEV, 0)
+                 ELSE ROUND(ISNULL(dev.CANT_DEV, 0)
+                      * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                             ELSE 1.0 / D.GRUPOS_TI END, 4)
+            END                                                     AS CANTIDAD_EJEC,
+            CASE WHEN D.TIPO_BIEN='S'
+                 THEN CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
+                           ELSE ROUND(ISNULL(dev.MNTO_DEV, 0)
+                                * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                                       ELSE 1.0 / D.GRUPOS_TI END, 2) END
                  WHEN ISNULL(dev.CANT_DEV,0) > 0 THEN dev.MNTO_DEV / dev.CANT_DEV
                  ELSE 0 END                                         AS PRECIO_UNIT_EJEC,
-            ISNULL(dev.MNTO_DEV, 0)                                 AS IMPORTE_EJEC,
+            CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
+                 ELSE ROUND(ISNULL(dev.MNTO_DEV, 0)
+                      * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                             ELSE 1.0 / D.GRUPOS_TI END, 2)
+            END                                                     AS IMPORTE_EJEC,
             /* DIFERENCIA = saldo POR EJECUTAR.
                Bienes   : (cantidad modificada - cantidad ejecutada) x precio del cuadro.
                           Así la diferencia solo es negativa si se ejecutó MÁS CANTIDAD
@@ -135,42 +165,96 @@ class CmnQuery
                           precios unitarios y en la trazabilidad del modal).
                Servicios: importe modificado - importe ejecutado (se miden en soles). */
             CASE WHEN D.TIPO_BIEN='S'
-                 THEN D.MNTO_TOTAL - ISNULL(dev.MNTO_DEV, 0)
-                 ELSE (D.CANT_TOTAL - ISNULL(dev.CANT_DEV, 0)) * D.PRECIO_UNIT
+                 THEN D.MNTO_TOTAL - (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV,0)
+                        ELSE ROUND(ISNULL(dev.MNTO_DEV,0)
+                             * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                                    ELSE 1.0 / D.GRUPOS_TI END, 2) END)
+                 ELSE (D.CANT_TOTAL - (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.CANT_DEV,0)
+                        ELSE ROUND(ISNULL(dev.CANT_DEV,0)
+                             * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                                    ELSE 1.0 / D.GRUPOS_TI END, 4) END)) * D.PRECIO_UNIT
             END                                                     AS DIFERENCIA
         FROM (
-            /* LÍNEAS DEL CMN AGRUPADAS por centro + meta + tarea + clasificador + ítem.
-               El SIGA permite VARIAS líneas del mismo ítem en un centro (p.ej. tres
-               locadores del mismo servicio: 9,300 + 9,300 + 23,000). La ejecución
-               pertenece al GRUPO (así lo subtotaliza el propio SIGA), no a una línea
-               suelta: sin agrupar, el ejecutado se duplicaba en cada línea y salían
-               diferencias negativas falsas. PRECIO_UNIT resultante = promedio ponderado. */
+            /* AGRUPADO FINAL por centro + meta + tarea + clasificador + ítem
+               (granularidad del reporte y de la atribución del ejecutado). */
             SELECT SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                    SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                    GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN, UNIDAD_MEDIDA,
-                   /* Los importes solo suman líneas VIGENTES (las excluidas no cuentan). */
-                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END) AS CANT_TOTAL,
-                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN MNTO_TOTAL ELSE 0 END) AS MNTO_TOTAL,
-                   CASE WHEN SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END) > 0
-                        THEN SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN MNTO_TOTAL ELSE 0 END)
-                           / SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN CANT_TOTAL ELSE 0 END)
-                        ELSE MAX(PRECIO_UNIT) END AS PRECIO_UNIT,
+                   SUM(CANT_VIG) AS CANT_TOTAL,
+                   SUM(MNTO_VIG) AS MNTO_TOTAL,
+                   CASE WHEN SUM(CANT_VIG) > 0 THEN SUM(MNTO_VIG) / SUM(CANT_VIG)
+                        ELSE MAX(PRECIO_UNIT) END               AS PRECIO_UNIT,
                    MAX(SEC_CUA_MOD_SAL) AS SEC_CUA_MOD_SAL,
-                   COUNT(*)             AS NRO_LINEAS,
-                   SUM(CASE WHEN ESTADO IN ('I','IT') THEN 1 ELSE 0 END)                              AS LIN_INCL,
-                   SUM(CASE WHEN ESTADO IN ('E','ET') THEN 1 ELSE 0 END)                              AS LIN_EXCL,
-                   SUM(CASE WHEN ESTADO = 'C' THEN 1 ELSE 0 END)                                      AS LIN_APROB,
-                   SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('I','IT','C','E','ET') THEN 1 ELSE 0 END)  AS LIN_OTRO
-            FROM   SIG_CUADRO_MODIFICADO_DET
-            WHERE  ANNO_PROG = :anioProg
-              AND  ANNO_EJEC = :anioEjec
-              AND  SEC_EJEC  = :secEjec
-              {$filtroCC}
+                   /* ── FACTORES DE REPARTO (ventanas sobre el resultado agrupado) ──
+                      MOD_ITEM/GRUPOS_ITEM: el ítem en el centro puede estar en varias
+                        actividades -> reparte el PROGRAMADO (la necesidad no guarda tarea).
+                      MOD_TI/GRUPOS_TI: el mismo ítem+tarea puede estar en varias
+                        metas/clasificadores -> reparte el EJECUTADO (que se atribuye por
+                        centro+tarea+ítem). Sin esto el gasto se contaba una vez por combo. */
+                   SUM(SUM(MNTO_VIG)) OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS MOD_ITEM,
+                   COUNT(*)           OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS GRUPOS_ITEM,
+                   SUM(SUM(MNTO_VIG)) OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS MOD_TI,
+                   COUNT(*)           OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS GRUPOS_TI,
+                   SUM(NRO_LINEAS) AS NRO_LINEAS,
+                   SUM(LIN_INCL)   AS LIN_INCL,
+                   SUM(LIN_EXCL)   AS LIN_EXCL,
+                   SUM(LIN_APROB)  AS LIN_APROB,
+                   SUM(LIN_OTRO)   AS LIN_OTRO
+            FROM (
+                /* ── LÍNEA LÓGICA DEL CMN (una por SEC_CUA_MOD_SAL) ──
+                   SIG_CUADRO_MODIFICADO_DET guarda el HISTORIAL de modificaciones:
+                   una misma línea puede tener varias filas (p.ej. el servicio 6961 con
+                   23,000 + 9,300 + 9,300 registradas con minutos de diferencia y
+                   FLAG_MODIFICADO=1 en la última). Sumarlas infla el cuadro.
+                   La CANTIDAD VIGENTE está en SIG_CUADRO_MODIFICADO_SALDO.CANT_TOTAL
+                   (para ese caso: 32,300, que es justo lo que muestra el SIGA).
+                   Verificado al céntimo contra las pantallas de dos centros distintos. */
+                SELECT d.SEC_EJEC, d.ANNO_PROG, d.ANNO_EJEC, d.SEC_CUA_MOD_SAL,
+                       MAX(d.FUENTE_FINANC) AS FUENTE_FINANC, MAX(d.TIPO_BIEN)    AS TIPO_BIEN,
+                       MAX(d.CENTRO_COSTO)  AS CENTRO_COSTO,   MAX(d.SEC_FUNC)    AS SEC_FUNC,
+                       MAX(d.CLASIFICADOR)  AS CLASIFICADOR,   MAX(d.TIPO_USO)    AS TIPO_USO,
+                       MAX(d.TIPO_TAREA)    AS TIPO_TAREA,     MAX(d.NIVEL_TAREA) AS NIVEL_TAREA,
+                       MAX(d.CODIGO_TAREA)  AS CODIGO_TAREA,   MAX(d.GRUPO_BIEN)  AS GRUPO_BIEN,
+                       MAX(d.CLASE_BIEN)    AS CLASE_BIEN,     MAX(d.FAMILIA_BIEN) AS FAMILIA_BIEN,
+                       MAX(d.ITEM_BIEN)     AS ITEM_BIEN,      MAX(d.UNIDAD_MEDIDA) AS UNIDAD_MEDIDA,
+                       MAX(d.PRECIO_UNIT)   AS PRECIO_UNIT,
+                       /* Si TODAS las filas de la línea están excluidas, la línea no rige. */
+                       CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
+                            ELSE COALESCE(MAX(s.CANT_TOTAL),
+                                          SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
+                       END AS CANT_VIG,
+                       CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
+                            ELSE COALESCE(MAX(s.CANT_TOTAL),
+                                          SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
+                                 * MAX(d.PRECIO_UNIT)
+                       END AS MNTO_VIG,
+                       COUNT(*) AS NRO_LINEAS,
+                       SUM(CASE WHEN d.ESTADO IN ('I','IT') THEN 1 ELSE 0 END)                             AS LIN_INCL,
+                       SUM(CASE WHEN d.ESTADO IN ('E','ET') THEN 1 ELSE 0 END)                             AS LIN_EXCL,
+                       SUM(CASE WHEN d.ESTADO = 'C' THEN 1 ELSE 0 END)                                     AS LIN_APROB,
+                       SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('I','IT','C','E','ET') THEN 1 ELSE 0 END) AS LIN_OTRO
+                FROM   SIG_CUADRO_MODIFICADO_DET d
+                LEFT JOIN SIG_CUADRO_MODIFICADO_SALDO s
+                       ON s.SEC_EJEC=d.SEC_EJEC AND s.ANNO_EJEC=d.ANNO_EJEC
+                      AND s.SEC_CUA_MOD_SAL=d.SEC_CUA_MOD_SAL
+                WHERE  d.ANNO_PROG = :anioProg
+                  AND  d.ANNO_EJEC = :anioEjec
+                  AND  d.SEC_EJEC  = :secEjec
+                  {$filtroCC}
+                GROUP BY d.SEC_EJEC, d.ANNO_PROG, d.ANNO_EJEC, d.SEC_CUA_MOD_SAL
+            ) L
             GROUP BY SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                      SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                      GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN, UNIDAD_MEDIDA
-            /* Se descartan los ítems cuyas líneas están TODAS excluidas. */
-            HAVING SUM(CASE WHEN ISNULL(ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) > 0
+            /* Los ítems totalmente excluidos SÍ se listan (con importe vigente 0 y
+               badge EXCLUIDO): forman parte del cuadro aprobado y el SIGA los
+               considera en la Fase de Consolidación y Aprobación. */
         ) D
         JOIN      SIG_CENTRO_COSTO cc
                   ON cc.SEC_EJEC=D.SEC_EJEC AND cc.ANO_EJE=D.ANNO_EJEC AND cc.CENTRO_COSTO=D.CENTRO_COSTO

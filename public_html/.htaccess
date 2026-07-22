@@ -1,0 +1,97 @@
+# ══════════════════════════════════════════════════════════════════
+#  .htaccess · SIGA-REPORTER
+#
+#  Apache lee este archivo SOLO. No hay que ejecutar ningún comando ni
+#  arrancar nada especial: basta con que esté subido por FTP junto a
+#  index.php y la protección ya está activa.
+#
+#  IMPORTANTE: el FTP suele ocultar los archivos que empiezan con punto.
+#  En FileZilla:  Servidor → Forzar mostrar archivos ocultos.
+#  Verifica después de subir que .htaccess y .env estén realmente ahí.
+# ══════════════════════════════════════════════════════════════════
+
+# ── 1. Sin listados de directorio ─────────────────────────────────
+# Evita que entrar a una carpeta sin index.php muestre todos los archivos.
+Options -Indexes
+
+# ── 2. Archivos ocultos: .env, .git, .gitignore, .htaccess… ───────
+# Se usan dos sintaxis a propósito: Apache 2.4 entiende "Require",
+# Apache 2.2 entiende "Order/Deny". Con las dos, funciona en cualquiera.
+<FilesMatch "^\.">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# El .env por su nombre exacto, por si el patrón anterior no aplicara
+<Files ".env">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</Files>
+
+# ── 3. Extensiones que nunca deben servirse ───────────────────────
+# Respaldos, logs, volcados de base de datos, documentación interna.
+<FilesMatch "\.(env|log|md|bak|old|sql|mdf|ldf|ini|sh|bat|ps1|yml|yaml|lock|dist|example)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# ── 4. Clases y partials: solo por include, nunca por URL ─────────
+# Abrirlos directamente daría un error de PHP que revela rutas del disco.
+<FilesMatch "^(config|Auth|CmnQuery|ExportService)\.php$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+# ── 5. Carpetas internas ──────────────────────────────────────────
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(partials|logs|vendor)(/|$) - [F,L]
+  # Cualquier ruta que contenga un archivo/carpeta oculta
+  RewriteRule (^|/)\. - [F,L]
+</IfModule>
+
+# ── 6. Que los errores nunca salgan por pantalla ──────────────────
+# Segunda red de seguridad: aunque el .env dijera APP_DEBUG=true por
+# descuido, en el servidor los errores van al log y no al navegador.
+<IfModule mod_php.c>
+  php_flag display_errors Off
+  php_flag log_errors On
+</IfModule>
+<IfModule mod_php7.c>
+  php_flag display_errors Off
+  php_flag log_errors On
+</IfModule>
+<IfModule mod_php8.c>
+  php_flag display_errors Off
+  php_flag log_errors On
+</IfModule>
+
+# ── 7. Cabeceras de seguridad básicas ─────────────────────────────
+<IfModule mod_headers.c>
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "SAMEORIGIN"
+  Header always set Referrer-Policy "same-origin"
+</IfModule>
+
+# ── 8. Página de inicio ───────────────────────────────────────────
+DirectoryIndex index.php
