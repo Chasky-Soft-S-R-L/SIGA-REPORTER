@@ -13,8 +13,11 @@ class ExportService
     /** Encabezados visibles del reporte (orden = columnas de la vista web). */
     public const HEADERS = [
         'ESTADO_CMN'          => 'ESTADO CMN',
+        'ESTADO_FASE'         => 'FASE',
+        'NRO_LINEAS'          => 'N° LÍNEAS',
         'PROGR_ANO_1'         => 'PROGR_ANO_1',
         'FF'                  => 'FF',
+        'FF_NOMBRE'           => 'FUENTE FINANCIAMIENTO',
         'RB'                  => 'RB',
         'TIPO_BIEN'           => 'TIPO_BIEN',
         'CCOSTO_COD'          => 'CCOSTO_COD',
@@ -24,10 +27,12 @@ class ExportService
         'CLASIF_COD'          => 'CLASIF_COD',
         'TIPO_USO'            => 'TIPO_USO',
         'ACTIV_OPERAT_COD'    => 'ACTIV_OPERAT_COD',
+        'ACTIV_OPERAT_NOMBRE' => 'ACTIVIDAD OPERATIVA',
         'GRUPO_BIEN'          => 'GRUPO_BIEN',
         'CLASE_BIEN'          => 'CLASE_BIEN',
         'FAMILIA_BIEN'        => 'FAMILIA_BIEN',
         'ITEM_BIEN'           => 'ITEM_BIEN',
+        'COD_PRODUCTO'        => 'CÓDIGO PRODUCTO',
         'NOMBRE_ITEM'         => 'NOMBRE_ITEM',
         'UNIDAD_MEDIDA'       => 'UNIDAD_MEDIDA',
         'CANTIDAD_PROG'       => 'CANTIDAD',
@@ -41,14 +46,21 @@ class ExportService
         'CANTIDAD_EJEC'       => 'CANTIDAD',
         'PRECIO_UNIT_EJEC'    => 'PRECIO_UNIT',
         'IMPORTE_EJEC'        => 'IMPORTE CMN EJECUTADO',
+        'IMPORTE_COMP'        => 'COMPROMISO',
+        'DEVENGADO'           => 'DEVENGADO',
         'DIFERENCIA'          => 'DIFERENCIA',
+        'SALDO_DEVENGAR'      => 'SALDO POR DEVENGAR',
     ];
+
+    /** Columnas enteras (sin decimales). */
+    public const INT = ['NRO_LINEAS'];
 
     /** Columnas numéricas (para formateo/alineación). */
     public const NUM = [
+        'NRO_LINEAS',
         'CANTIDAD_PROG','PRECIO_UNIT_PROG','IMPORTE_PROG',
         'CANTIDAD_MOD','PRECIO_UNIT_MOD','IMPORTE_MOD',
-        'CANTIDAD_EJEC','PRECIO_UNIT_EJEC','IMPORTE_EJEC','DIFERENCIA',
+        'CANTIDAD_EJEC','PRECIO_UNIT_EJEC','IMPORTE_EJEC','IMPORTE_COMP','DEVENGADO','DIFERENCIA','SALDO_DEVENGAR',
     ];
 
     /** Paleta de la vista web: [color fuerte, color claro] por actividad. */
@@ -134,7 +146,10 @@ class ExportService
         $out = '';
         foreach (self::HEADERS as $key => $_) {
             $v = $r[$key] ?? '';
-            if (in_array($key, self::NUM, true)) {
+            if (in_array($key, self::INT, true)) {
+                $out .= '<td style="background:' . $bg . ';mso-number-format:\'0\';text-align:right">'
+                      . (int)$v . '</td>';
+            } elseif (in_array($key, self::NUM, true)) {
                 $out .= '<td style="background:' . $bg . ';mso-number-format:\'#,##0.00\';text-align:right">'
                       . number_format((float)$v, 2, '.', '') . '</td>';
             } else {
@@ -264,7 +279,9 @@ class ExportService
             $out = '';
             foreach (self::HEADERS as $key => $_) {
                 $v = $r[$key] ?? '';
-                if (in_array($key, self::NUM, true)) {
+                if (in_array($key, self::INT, true)) {
+                    $out .= '<td class="num" style="background:' . $bg . '">' . (int)$v . '</td>';
+                } elseif (in_array($key, self::NUM, true)) {
                     $neg = ($key === 'DIFERENCIA' && (float)$v < -0.005) ? ' neg' : '';
                     $out .= '<td class="num' . $neg . '" style="background:' . $bg . '">' . number_format((float)$v, 2) . '</td>';
                 } else {

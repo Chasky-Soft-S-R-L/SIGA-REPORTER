@@ -6,6 +6,10 @@
  * ESTADOS (3): Programado · Modificado · Ejecutado. El estado de cada ítem llega
  * ya clasificado desde la capa Query en la columna ESTADO_FASE.
  *
+ * CARGA BAJO DEMANDA: al abrir la pantalla NO se consulta el SIGA (traer todos
+ * los centros es la operación más costosa). Se muestra un estado inicial y los
+ * datos llegan al elegir un centro o al pulsar "Cargar todos los centros".
+ *
  * CONFIGURACIÓN: servidor, base, SEC_EJEC y año por defecto salen del .env a
  * través de config.php. No hay credenciales escritas en este archivo.
  * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
@@ -164,6 +168,9 @@ include __DIR__ . '/partials/head.php';
         <ul id="ccList" class="hidden absolute z-30 mt-1 w-full max-h-64 overflow-auto bg-white border border-gray-200 rounded-lg shadow-lg text-sm"></ul>
       </div>
       <button class="w-full sm:w-auto px-5 py-3 text-sm rounded-lg bg-primary text-white hover:bg-primary-dark">Consultar</button>
+      <button type="button" id="btnAll" class="w-full sm:w-auto px-4 py-3 text-sm rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50 whitespace-nowrap">
+        <i class="fa-solid fa-layer-group mr-1"></i> Cargar todos los centros
+      </button>
     </form>
 
     <!-- Barra de herramientas (cliente → servidor) -->
@@ -333,10 +340,18 @@ include __DIR__ . '/partials/head.php';
   body.fsOn #fsBar{display:flex}
   body.fsOn{overflow:hidden}
   tr.itemrow{transition:filter .12s ease}
+  /* Cabeceras a doble línea: en vez de una fila larguísima, el texto se envuelve. */
+  #thead th{white-space:normal;line-height:1.15;vertical-align:bottom;min-width:64px;max-width:150px}
+  #thead th.w-6{min-width:0}
   tr.itemrow:hover{filter:brightness(.965)}
   tr.ghead:hover{filter:brightness(1.06)}
   tr.gsub{letter-spacing:.02em}
   #tbody tr.itemrow td:first-child{position:relative}
+  /* ── Estado inicial (sin consulta) ─────────── */
+  .phFade{animation:phIn .35s cubic-bezier(.2,.8,.2,1)}
+  @keyframes phIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+  .phIcon{animation:phFloat 3.2s ease-in-out infinite}
+  @keyframes phFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
 </style>
 
 <?php /* Paleta Ctrl+K ANTES del script principal: así SIGA.accion ya existe
@@ -373,7 +388,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),fMetaEl=$('fMeta'),fActEl=$('fAct'),sortEl=$('sort'),perPageEl=$('perPage');
   const vTable=$('viewTable'),vKanban=$('viewKanban'),theadEl=$('thead'),tbodyEl=$('tbody'),tfootEl=$('tfoot');
   const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:'<?= htmlspecialchars($fMeta) ?>',act:'<?= htmlspecialchars($fAct) ?>',fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
-  let mode='table', agrupar=true, prevSort='mod_desc', last={rows:[],total:0,summary:[]};
+  /* consultado = ya se trajo data del servidor al menos una vez. Distingue
+     "todavía no consulté" (placeholder) de "consulté y no hubo resultados". */
+  let mode='table', agrupar=true, prevSort='mod_desc', consultado=false, last={rows:[],total:0,summary:[]};
 
   /* ═══════════════ SELECTOR DE CAMPOS ═══════════════
      Columnas virtuales (__) + columnas reales de ExportService::HEADERS.
@@ -385,16 +402,16 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
   function GRUPO(k){
     if(k.startsWith('__')||/^ESTADO/.test(k))                      return 'Estado y seguimiento';
-    if(/^IMPORTE|^PRECIO|^CANT|DIFERENCIA|^SALDO/.test(k))         return 'Montos y cantidades';
-    if(/^CCOSTO|^META|^ACTIV|^FUENTE|^RUBRO/.test(k))              return 'Organización';
-    if(/BIEN|ITEM|CLASIF|UNIDAD|TIPO|GRUPO|CLASE|FAMILIA/.test(k)) return 'Identificación del ítem';
+    if(/^IMPORTE|^PRECIO|^CANT|DIFERENCIA|^SALDO|^DEVENGADO/.test(k)) return 'Montos y cantidades';
+    if(/^CCOSTO|^META|^ACTIV|^FUENTE|^RUBRO|^FF/.test(k))          return 'Organización';
+    if(/BIEN|ITEM|CLASIF|UNIDAD|TIPO|GRUPO|CLASE|FAMILIA|^COD_PROD/.test(k)) return 'Identificación del ítem';
     if(/ORDEN|PROVE|CERT|SIAF|DOC|FECHA/.test(k))                  return 'Ejecución';
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','NOMBRE_ITEM','UNIDAD_MEDIDA'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','UNIDAD_MEDIDA','IMPORTE_COMP','DEVENGADO','SALDO_DEVENGAR'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
-    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD'].includes(k)
+    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','FF','FF_NOMBRE','IMPORTE_COMP','DEVENGADO','SALDO_DEVENGAR'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
     completo  :()=>ALLC.slice()
   };
@@ -537,6 +554,41 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return '<tr class="'+(o.trCls||'')+'" style="'+(o.trStyle||'')+'">'+c+'</tr>';
   }
 
+  /* ── ESTADO INICIAL · sin consulta ─────────────────────────────────────
+     Traer todos los centros es la operación más costosa del sistema, así que
+     al abrir la pantalla no se consulta nada: se muestra este estado y los
+     datos llegan cuando el usuario elige un centro (recarga con ?ccosto=) o
+     pulsa "Cargar todos los centros". */
+  function placeholder(){
+    const nc=Math.max(1,COLS().length);
+    chipsEl.innerHTML='<span class="inline-flex items-center gap-2 text-xs text-gray-400">'
+      +'<i class="fa-regular fa-circle-pause"></i> Sin consulta activa'
+      +'<span class="text-gray-300">·</span> elige un centro de costo o carga todos</span>';
+    theadEl.innerHTML=''; tfootEl.innerHTML='';
+    tbodyEl.innerHTML='<tr><td colspan="'+nc+'" class="p-0"><div class="phFade flex flex-col items-center text-center px-6 py-20">'
+      +'<div class="phIcon w-16 h-16 rounded-2xl grid place-items-center mb-4" '
+        +'style="background:linear-gradient(135deg,rgba(26,187,156,.16),rgba(13,110,253,.12))">'
+        +'<i class="fa-solid fa-magnifying-glass-chart text-2xl" style="color:rgb(20,150,125)"></i></div>'
+      +'<p class="text-[15px] font-bold text-gray-800">Elige un centro de costo para empezar</p>'
+      +'<p class="text-[12px] text-gray-500 mt-1 max-w-md leading-relaxed">'
+        +'Busca por código o nombre en el campo de arriba. También puedes traer el cuadro '
+        +'completo de la entidad, aunque esa consulta demora bastante más.</p>'
+      +'<div class="flex flex-wrap gap-2 justify-center mt-5">'
+        +'<button type="button" id="phBuscar" class="px-4 py-2 text-sm font-semibold rounded-lg text-white shadow-sm hover:brightness-105" '
+          +'style="background:linear-gradient(135deg,rgb(26,187,156),rgb(20,150,125))">'
+          +'<i class="fa-solid fa-building mr-1"></i> Buscar centro de costo</button>'
+        +'<button type="button" id="phAll" class="px-4 py-2 text-sm font-semibold rounded-lg border border-gray-300 text-gray-600 hover:bg-gray-50">'
+          +'<i class="fa-solid fa-layer-group mr-1"></i> Cargar todos los centros</button>'
+      +'</div>'
+      +'<p class="text-[10px] text-gray-400 mt-5">Ejercicio <?= $anioProg ?> · ejecución <?= $anioEjec ?></p>'
+      +'</div></td></tr>';
+    $('totLbl').textContent='sin consultar';
+    $('pageInfo').textContent=''; $('pageNum').textContent='';
+    $('prev').disabled=true; $('next').disabled=true;
+    const b=$('phBuscar'); if(b) b.onclick=()=>{const i=document.getElementById('ccSearch'); if(i){i.focus();i.select();}};
+    const a=$('phAll');    if(a) a.onclick=()=>load();
+  }
+
   function renderTable(rows){
     const cols=COLS(), nCols=Math.max(1,cols.length);
     theadEl.innerHTML=cols.map(k=>
@@ -623,7 +675,12 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   function card(d,f,idx){return '<div class="bg-white rounded-lg border border-gray-200 border-l-4 '+f.col+' p-2.5 shadow-sm cursor-pointer hover:shadow kcard" data-idx="'+idx+'"><p class="text-[13px] font-medium leading-snug">'+ec(d.NOMBRE_ITEM)+'</p><p class="text-[11px] text-gray-400 mt-0.5">Meta '+ec(d.META)+' · '+ec(d.ACTIV_OPERAT_COD)+' · '+ec(d.UNIDAD_MEDIDA)+'</p><div class="mt-1 flex flex-wrap gap-1">'+cmnBadge(d)+(d.ESTADO_ORDEN?badge(d.ESTADO_ORDEN):'')+'</div><div class="grid grid-cols-4 gap-1 mt-2 text-center">'+mini('Prog',d.IMPORTE_PROG)+mini('Mod',d.IMPORTE_MOD)+mini('Ejec',d.IMPORTE_EJEC)+mini('Dif',d.DIFERENCIA,1)+'</div></div>';}
   function mini(l,v,hl){return '<div class="rounded '+(hl?'bg-primary/5':'bg-gray-50')+' py-1"><div class="text-[9px] text-gray-400 uppercase">'+l+'</div><div class="text-[11px] font-semibold tabular-nums '+(hl?'text-primary-dark':'')+'">'+money(v)+'</div></div>';}
 
-  function paint(){if(mode==='table'){vTable.classList.remove('hidden');vKanban.classList.add('hidden');renderTable(last.rows);}else{vKanban.classList.remove('hidden');vTable.classList.add('hidden');renderKanban(last.rows);}}
+  /* Si aún no se ha consultado nada, paint() no debe pisar el estado inicial
+     (se invoca también al cambiar de vista o de columnas). */
+  function paint(){
+    if(!consultado){placeholder();return;}
+    if(mode==='table'){vTable.classList.remove('hidden');vKanban.classList.add('hidden');renderTable(last.rows);}
+    else{vKanban.classList.remove('hidden');vTable.classList.add('hidden');renderKanban(last.rows);}}
   function renderPager(){const t=last.total,pp=st.perPage,from=t?((st.page-1)*pp+1):0,to=Math.min(t,st.page*pp),pages=Math.max(1,Math.ceil(t/pp));
     $('totLbl').textContent=t+' ítems';$('pageInfo').textContent=from+'–'+to+' de '+t;$('pageNum').textContent='Pág. '+st.page+' / '+pages;
     $('prev').disabled=st.page<=1;$('next').disabled=st.page>=pages;
@@ -650,7 +707,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       if(r.redirected || !ct.includes('json')){ location.href='login.php?next=index.php'; return; }
       const j=await r.json();
       if(j.error){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-triangle-exclamation text-red-500 mr-1"></i><span class="text-red-600">'+ec(j.error)+'</span></td></tr>';tfootEl.innerHTML='';return;}
-      last=j;renderChips(j.summary);paint();renderPager();
+      last=j;consultado=true;renderChips(j.summary);paint();renderPager();
     }catch(e){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-plug-circle-xmark text-red-500 mr-1"></i><span class="text-red-600">Error de red</span></td></tr>';tfootEl.innerHTML='';}
     finally{hideLoad();}
   }
@@ -726,16 +783,30 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       +'</div>';
   }
 
+  /* Banner prominente de REBAJA/AMPLIACIÓN, al tope del resumen (más visible que
+     la caja intercalada en el paso 1). Solo aparece si el cuadro cambió de importe. */
+  function bannerAjuste(ori,mods){
+    const a=ajusteCuadro(ori,mods); if(!a)return'';
+    const col=a.baja?INK.rojo:INK.verde, bg=a.baja?'#fef2f2':'#f0fdf4', bd=a.baja?'#fecaca':'#bbf7d0';
+    return '<div class="flex items-center gap-3 mb-3 px-3 py-2 rounded-lg" style="background:'+bg+';border:1.5px solid '+bd+'">'
+      +'<div class="w-9 h-9 rounded-full grid place-items-center text-white text-lg shrink-0" style="background:'+col+'">'+(a.baja?'▼':'▲')+'</div>'
+      +'<div class="min-w-0"><p class="text-[13px] font-bold" style="color:'+col+'">'+(a.baja?'Cuadro REBAJADO':'Cuadro AMPLIADO')
+        +' <span class="tabular-nums">'+(a.dM>0?'+':'')+'S/ '+money(a.dM)+'</span> <span class="text-[11px] font-normal">('+(a.pct>0?'+':'')+a.pct.toFixed(1)+'%)</span></p>'
+      +'<p class="text-[11px] text-gray-600">De S/ '+money(a.oM)+' a <b>S/ '+money(a.mM)+'</b> vigente'+(a.fecha?' · '+ec(a.fecha):'')+'</p></div></div>';
+  }
+
   /* — RESUMEN EJECUTIVO — */
   function renderResumen(h,d){
     const {cua,con,cer,ord,fas}=prep(h);
     const dev=fas.filter(r=>r.fase==='Devengado'),com=fas.filter(r=>r.fase==='Comprometido');
+    const oriTop=cua.find(r=>r.etapa==='Original'),modsTop=cua.filter(r=>r.etapa==='Modificado');
     const P=+d.IMPORTE_PROG,M=+d.IMPORTE_MOD,E=+d.IMPORTE_EJEC;
     const max=Math.max(P,M,E,1);
     const bar=(l,v,c)=>'<div class="flex items-center gap-2 py-1"><span class="w-36 text-[10px] uppercase tracking-wide text-gray-500 text-right shrink-0">'+l+'</span><div class="flex-1 h-4 bg-gray-100 rounded-sm overflow-hidden"><div class="h-full transition-all" style="width:'+Math.max(1,v/max*100)+'%;background:'+c+'"></div></div><span class="w-28 text-right text-[11px] font-bold tabular-nums shrink-0" style="color:'+c+'">S/ '+money(v)+'</span></div>';
     const pct=M>0?Math.min(999,E/M*100):0;
     const pcol=pct>=70?INK.verde:pct>=50?'#d97706':INK.rojo;
-    let out=secT('Situación económica del ítem')
+    let out=bannerAjuste(oriTop,modsTop)
+      +secT('Situación económica del ítem')
       +bar('Programado (CMN)',P,INK.gris)+bar('Modificado vigente',M,'#d97706')+bar('Ejecutado',E,INK.verde)
       +'<div class="flex items-center gap-3 mt-2"><div class="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden"><div class="h-full rounded-full" style="width:'+Math.min(100,pct)+'%;background:'+pcol+'"></div></div><span class="text-sm font-bold tabular-nums" style="color:'+pcol+'">'+pct.toFixed(1)+'%</span><span class="text-[10px] uppercase tracking-wide text-gray-400">de avance</span></div>'
       +'<p class="text-[11px] text-gray-500 mt-1">Saldo por ejecutar: <b class="tabular-nums" style="color:'+((M-E)<-0.005?INK.rojo:INK.tinta)+'">S/ '+money(M-E)+'</b></p>';
@@ -770,21 +841,58 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         ?'<div class="mt-1 text-[11px] px-2 py-1 rounded" style="background:#fffbeb;border:1px solid #fde68a">Precio referencial <span class="line-through text-gray-400">S/ '+money(base)+'</span> → <b style="color:'+((+r.precio)>base?INK.rojo:INK.verde)+'">S/ '+money(r.precio)+'</b> · fijado por Logística en el estudio de mercado del consolidado.</div>':'';
       return fila('Consolidado N° <b>'+ec(r.nro)+'</b>'+(r.nro_cert?' · Cert. '+ec(r.nro_cert):'')+' <span class="text-gray-400 italic">('+ec(r.fecha_precio||r.fecha_consolid||'')+')</span>','<b>'+(+r.cant)+' × S/ '+money(r.precio)+' = S/ '+money(r.monto)+'</b>')+cambio;}).join('')
       :'<span class="text-xs text-gray-400">Aún no consolidado por Logística: rige el precio referencial.</span>';
-    let p3=cer.length?cer.map(r=>{const anu=/Anulada/i.test(r.estado||'');
-      return fila((anu?'<span class="line-through text-gray-400">':'')+'Cert. '+ec(r.nro)+' · '+ec(r.estado)+(anu?' <b style="color:'+INK.rojo+'" class="no-underline">ANULADO</b></span>':'')+' <span class="text-gray-400 italic">('+ec(r.fecha)+')</span>','<span class="'+(anu?'line-through text-gray-400':'font-bold')+'">S/ '+money(r.monto)+'</span>',anu?'rounded':'').replace('border-b py-1 rounded','border-b py-1 rounded px-1" style="background:#fdf2f2;border-color:#e5e7eb');}).join('')
-      :'<span class="text-xs text-gray-400">Sin certificación presupuestal todavía.</span>';
-    let p4=ord.length?ord.map(r=>fila('<b>'+ec(r.orden)+'</b> · '+ec(r.proveedor)+' <span class="text-gray-400 italic">('+ec(r.fecha)+')</span>',(+r.cant)+' × S/ '+money(r.precio)+' = <b>S/ '+money(r.monto)+'</b>')).join(''):'<span class="text-xs text-gray-400">Sin orden de compra/servicio emitida.</span>';
-    const totDev=dev.reduce((s,r)=>s+ +r.monto,0);
-    let p5=dev.length?dev.map(r=>fila(ec(r.doc)+' <span class="text-gray-400 italic">('+ec(r.fecha||'')+')</span>','S/ '+money(r.monto))).join('')+fila('<b>Total devengado</b>','<b style="color:'+INK.verde+'">S/ '+money(totDev)+'</b>')
-      :com.length?'<span class="text-xs" style="color:'+INK.azul+'">Comprometido con orden emitida, aún sin devengar — el gasto está reservado pero todavía no se recibe/factura.</span>'
-      :'<span class="text-xs text-gray-400">Sin ejecución registrada.</span>';
+    /* Certificaciones: se muestra el RESUMEN (vigente + total), y el detalle línea
+       a línea queda plegado en un <details> para no saturar el expediente. */
+    let p3;
+    if(cer.length){
+      const vig=cer.filter(r=>!/Anulada/i.test(r.estado||'')), anul=cer.filter(r=>/Anulada/i.test(r.estado||''));
+      const tVig=vig.reduce((s,r)=>s+ +r.monto,0);
+      let resumen=fila('<b>Certificado vigente</b> · '+vig.length+' cert.'+(anul.length?' <span class="text-gray-400">('+anul.length+' anulada'+(anul.length>1?'s':'')+')</span>':''),
+                       '<b style="color:'+INK.ambar+'">S/ '+money(tVig)+'</b>');
+      const detalle=cer.map(r=>{const anu=/Anulada/i.test(r.estado||'');
+        return fila((anu?'<span class="line-through text-gray-400">':'')+'Cert. '+ec(r.nro)+' · '+ec(r.estado)+(anu?' <b style="color:'+INK.rojo+'" class="no-underline">ANULADO</b></span>':'')+' <span class="text-gray-400 italic">('+ec(r.fecha)+')</span>',
+                    '<span class="'+(anu?'line-through text-gray-400':'font-bold')+'">S/ '+money(r.monto)+'</span>');}).join('');
+      p3=resumen+'<details class="mt-1"><summary class="text-[11px] text-gray-500 cursor-pointer hover:text-gray-700 select-none">Ver detalle de las '+cer.length+' certificaciones</summary><div class="mt-1">'+detalle+'</div></details>';
+    } else p3='<span class="text-xs text-gray-400">Sin certificación presupuestal todavía.</span>';
+    /* Tabla estilo SIGA "Ejecución por Área Usuaria": cada orden con su proveedor,
+       compromiso (monto de la orden), devengado (lo ya ejecutado de esa orden) y
+       saldo por devengar. Reproduce el Excel que arma el área usuaria. */
+    let p4;
+    if(ord.length){
+      /* Devengado por número de orden: la fase Devengado ahora trae nro_orden. */
+      const devPorOrden={};
+      dev.forEach(r=>{const k=String(r.nro_orden||'').trim();if(k)devPorOrden[k]=(devPorOrden[k]||0)+ +r.monto;});
+      const numOrden=r=>{const m=(r.orden||'').match(/(\d+)/);return m?m[1]:'';};
+      const esServicio=r=>/^O\/?S|\bOS\b|SERVICIO/i.test(r.orden||'');
+      let tC=0,tD=0;
+      const filas=ord.map(r=>{
+        const comp=+r.monto, dv=devPorOrden[numOrden(r)]||0, saldo=comp-dv;
+        tC+=comp; tD+=dv;
+        return '<tr>'
+          +'<td class="py-1 px-1.5 border-b text-xs font-bold" style="border-color:#e5e7eb">'+ec(r.orden)+'</td>'
+          +'<td class="py-1 px-1.5 border-b text-[11px] text-gray-600" style="border-color:#e5e7eb">'+ec(r.proveedor||'—')+'</td>'
+          +'<td class="py-1 px-1.5 border-b text-right tabular-nums text-xs" style="border-color:#e5e7eb">'+money(comp)+'</td>'
+          +'<td class="py-1 px-1.5 border-b text-right tabular-nums text-xs" style="border-color:#e5e7eb;color:'+INK.verde+'">'+money(dv)+'</td>'
+          +'<td class="py-1 px-1.5 border-b text-right tabular-nums text-xs" style="border-color:#e5e7eb;color:'+(saldo>0.005?INK.azul:'#9ca3af')+'">'+money(saldo)+'</td>'
+          +'</tr>';
+      }).join('');
+      const th=t=>'<th class="py-1 px-1.5 text-[9px] uppercase tracking-wide text-gray-500 text-left" style="border-bottom:1.5px solid #333">'+t+'</th>';
+      const thR=t=>'<th class="py-1 px-1.5 text-[9px] uppercase tracking-wide text-gray-500 text-right" style="border-bottom:1.5px solid #333">'+t+'</th>';
+      p4='<table class="w-full"><thead><tr>'+th('N° Orden')+th('Proveedor')+thR('Compromiso')+thR('Devengado')+thR('Saldo × Dev')+'</tr></thead>'
+        +'<tbody>'+filas+'</tbody>'
+        +'<tfoot><tr class="font-bold">'
+          +'<td colspan="2" class="py-1.5 px-1.5 text-right text-xs" style="border-top:1.5px solid #333">TOTAL ('+ord.length+' órdenes)</td>'
+          +'<td class="py-1.5 px-1.5 text-right tabular-nums text-xs" style="border-top:1.5px solid #333">'+money(tC)+'</td>'
+          +'<td class="py-1.5 px-1.5 text-right tabular-nums text-xs" style="border-top:1.5px solid #333;color:'+INK.verde+'">'+money(tD)+'</td>'
+          +'<td class="py-1.5 px-1.5 text-right tabular-nums text-xs" style="border-top:1.5px solid #333;color:'+INK.azul+'">'+money(tC-tD)+'</td>'
+        +'</tr></tfoot></table>';
+    } else p4='<span class="text-xs text-gray-400">Sin orden de compra/servicio emitida.</span>';
     out+=secT('¿Qué pasó con este ítem? · flujo del gasto')
       +paso(1,INK.gris,'Programación · Cuadro de Necesidades',p1)
       +paso(2,INK.violeta,'Consolidación PAAC · aquí se fija el precio real',p2)
       +paso(3,INK.ambar,'Certificación presupuestal',p3)
-      +paso(4,INK.azul,'Orden de compra / servicio',p4)
-      +paso(5,INK.verde,'Ejecución (devengado)',p5,true)
-      +'<p class="text-[10px] text-gray-400 italic mt-1">El girado y pagado se registran en el SIAF.</p>';
+      +paso(4,INK.azul,'Orden de compra / servicio · con ejecución por orden',p4,true)
+      +'<p class="text-[10px] text-gray-400 italic mt-1">El compromiso, devengado y saldo se muestran por orden en la tabla. El girado y pagado se registran en el SIAF.</p>';
     return out;
   }
 
@@ -846,6 +954,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     last.rows.forEach(d=>colapsados.add(d.ACTIV_OPERAT_COD||'—'));paint();});
   $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;st.page=1;load();});
   perPageEl.addEventListener('change',()=>{st.perPage=+perPageEl.value;st.page=1;load();});
+  /* Cargar todos los centros (botón del formulario y del estado inicial). */
+  const btnAll=$('btnAll'); if(btnAll) btnAll.addEventListener('click',()=>load());
   /* pantalla completa de la tabla */
   function toggleFs(on){
     const t=$('viewTable'), b=$('btnFs').querySelector('i');
@@ -867,6 +977,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* ── Acciones de ESTA pantalla en la paleta Ctrl+K ──
      accesos.php se incluye antes de este script, así que SIGA.accion existe. */
   if(window.SIGA&&SIGA.accion){
+    SIGA.accion('Cargar todos los centros','fa-layer-group',()=>load(),'Consulta el CMN completo de la entidad');
     SIGA.accion('Exportar a Excel','fa-file-excel',()=>{updateExport();$('expExcel').click();},'Descarga el CMN con los filtros y campos actuales');
     SIGA.accion('Exportar a PDF','fa-file-pdf',()=>{updateExport();window.open($('expPdf').href,'_blank');},'Abre el PDF con los filtros y campos actuales');
     SIGA.accion('Pantalla completa','fa-expand',()=>toggleFs(true),'Tabla a pantalla completa (Esc para salir)');
@@ -881,7 +992,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   // set selects a estado inicial
   sortEl.value=st.sort; perPageEl.value=st.perPage;
   agrupar=(st.sort==='act_item');$('agrupar').checked=agrupar;
-  setMode('table'); load();
+  setMode('table');
+  /* Con centro elegido se consulta directo; sin centro, estado inicial. */
+  if(CC!=='') load(); else placeholder();
 })();
 </script>
 </body></html>

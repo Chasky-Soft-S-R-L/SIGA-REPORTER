@@ -66,6 +66,10 @@ class CmnQuery
     private function innerSql(bool $withCC): string
     {
         $filtroCC = $withCC ? " AND d.CENTRO_COSTO = :ccosto " : "";
+        /* Factor de reparto del ejecutado/comprometido entre filas que comparten
+           centro+tarea+ítem (proporcional al importe vigente; partes iguales si vigente 0). */
+        $repTI = "(CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                        ELSE 1.0 / D.GRUPOS_TI END)";
         return "
         SELECT
             D.ANNO_PROG                                             AS PROGR_ANO_1,
@@ -81,6 +85,13 @@ class CmnQuery
             'C' + RIGHT('0000' + CONVERT(VARCHAR,D.CODIGO_TAREA),4) AS ACTIV_OPERAT_COD,
             tar.nombre_tarea                                        AS ACTIV_OPERAT_NOMBRE,
             D.GRUPO_BIEN, D.CLASE_BIEN, D.FAMILIA_BIEN, D.ITEM_BIEN,
+            /* Código de producto = grupo+clase+familia+item concatenado (como en el SIGA). */
+            D.GRUPO_BIEN + D.CLASE_BIEN + D.FAMILIA_BIEN + D.ITEM_BIEN AS COD_PRODUCTO,
+            REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ','')          AS CLASIF_PLANO,
+            /* Nombre de la fuente: la mayoría de instalaciones del SIGA lo guardan en
+               FUENTE_FINANC.NOMBRE. Si en esta base la columna se llamara distinto,
+               cambiar aquí (p.ej. ff.DESCRIPCION). Se protege con ISNULL. */
+            ISNULL(ff.NOMBRE, D.FUENTE_FINANC)                      AS FF_NOMBRE,
             cat.NOMBRE_ITEM                                         AS NOMBRE_ITEM,
             um.NOMBRE                                               AS UNIDAD_MEDIDA,
             /* PROGRAMADO = solo lo APROBADO en el cuadro de necesidades, repartido
@@ -137,43 +148,49 @@ class CmnQuery
             /* EJECUTADO repartido: el gasto se atribuye por centro+tarea+ítem, pero
                una fila del reporte es centro+meta+clasificador+tarea+ítem. Si el mismo
                ítem+tarea está en varias metas/clasificadores, sin repartir el importe
-               se contaría una vez por cada combinación (duplicando el ejecutado). */
+               se contaría una vez por cada combinación (duplicando el ejecutado).
+               El factor {$repTI} reparte proporcional al importe vigente de la fila. */
             CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(dev.MNTO_DEV,0) > 0 THEN 1 ELSE 0 END
                  WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.CANT_DEV, 0)
-                 ELSE ROUND(ISNULL(dev.CANT_DEV, 0)
-                      * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
-                             ELSE 1.0 / D.GRUPOS_TI END, 4)
+                 ELSE ROUND(ISNULL(dev.CANT_DEV, 0) * {$repTI}, 4)
             END                                                     AS CANTIDAD_EJEC,
             CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
-                           ELSE ROUND(ISNULL(dev.MNTO_DEV, 0)
-                                * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
-                                       ELSE 1.0 / D.GRUPOS_TI END, 2) END
+                           ELSE ROUND(ISNULL(dev.MNTO_DEV, 0) * {$repTI}, 2) END
                  WHEN ISNULL(dev.CANT_DEV,0) > 0 THEN dev.MNTO_DEV / dev.CANT_DEV
                  ELSE 0 END                                         AS PRECIO_UNIT_EJEC,
+            /* IMPORTE_EJEC = DEVENGADO (ejecución real). Es la columna histórica; se
+               conserva el nombre para no romper el resto del código. */
             CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
-                 ELSE ROUND(ISNULL(dev.MNTO_DEV, 0)
-                      * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
-                             ELSE 1.0 / D.GRUPOS_TI END, 2)
+                 ELSE ROUND(ISNULL(dev.MNTO_DEV, 0) * {$repTI}, 2)
             END                                                     AS IMPORTE_EJEC,
-            /* DIFERENCIA = saldo POR EJECUTAR.
-               Bienes   : (cantidad modificada - cantidad ejecutada) x precio del cuadro.
-                          Así la diferencia solo es negativa si se ejecutó MÁS CANTIDAD
-                          que la cuadrada (sobre-ejecución real), nunca por diferencias
-                          de precio entre el cuadro y la compra (esas se ven en los
-                          precios unitarios y en la trazabilidad del modal).
-               Servicios: importe modificado - importe ejecutado (se miden en soles). */
-            CASE WHEN D.TIPO_BIEN='S'
-                 THEN D.MNTO_TOTAL - (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV,0)
-                        ELSE ROUND(ISNULL(dev.MNTO_DEV,0)
-                             * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
-                                    ELSE 1.0 / D.GRUPOS_TI END, 2) END)
-                 ELSE (D.CANT_TOTAL - (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.CANT_DEV,0)
-                        ELSE ROUND(ISNULL(dev.CANT_DEV,0)
-                             * CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
-                                    ELSE 1.0 / D.GRUPOS_TI END, 4) END)) * D.PRECIO_UNIT
-            END                                                     AS DIFERENCIA
+            CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_COMP, 0)
+                 ELSE ROUND(ISNULL(dev.MNTO_COMP, 0) * {$repTI}, 2)
+            END                                                     AS IMPORTE_COMP,
+            /* DEVENGADO = ejecución real (idéntico a IMPORTE_EJEC; nombre propio para la lista). */
+            CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
+                 ELSE ROUND(ISNULL(dev.MNTO_DEV, 0) * {$repTI}, 2)
+            END                                                     AS DEVENGADO,
+            /* DIFERENCIA = PRESUPUESTO VIGENTE − DEVENGADO.
+               El presupuesto vigente es el MODIFICADO si el ítem fue modificado
+               (D.MNTO_TOTAL > 0); si no, el PROGRAMADO original. Así se compara lo
+               ejecutado contra el presupuesto que realmente rige.
+               Negativa = SOBREGIRO (se ejecutó más de lo presupuestado). */
+            (CASE WHEN D.MNTO_TOTAL > 0 THEN D.MNTO_TOTAL
+                  WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                  ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                       * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                              ELSE 1.0 / D.GRUPOS_ITEM END, 2) END)
+            -
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_DEV, 0) * {$repTI}, 2) END)  AS DIFERENCIA,
+          
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_COMP, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_COMP, 0) * {$repTI}, 2) END)
+            -
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEV, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_DEV, 0) * {$repTI}, 2) END)  AS SALDO_DEVENGAR
         FROM (
             /* AGRUPADO FINAL por centro + meta + tarea + clasificador + ítem
                (granularidad del reporte y de la atribución del ejecutado). */
@@ -374,7 +391,8 @@ class CmnQuery
                 dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                 db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
                 SUM(dm.CANT_DEPEND) AS CANT_DEV,
-                SUM(dm.MNTO_SOLES)  AS MNTO_DEV
+                SUM(dm.MNTO_SOLES)  AS MNTO_DEV,
+                SUM(dm.VALOR_DEPEND) AS MNTO_COMP
             FROM   SIG_CUADRO_ADQUISICION ca
             JOIN   SIG_DETALLE_BSERV_CUADRO db
                    ON db.SEC_EJEC=ca.SEC_EJEC AND db.ANO_EJE=ca.ANO_EJE
@@ -435,7 +453,14 @@ class CmnQuery
     private function bindFiltros(PDOStatement $st, string $tipo, string $search, string $meta = '', string $act = '', ?string $fase = null): void
     {
         if ($tipo === 'B' || $tipo === 'S') $st->bindValue(':tipo', $tipo);
-        if ($search !== '') { $st->bindValue(':q1', '%'.$search.'%'); $st->bindValue(':q2', '%'.$search.'%'); $st->bindValue(':q3', '%'.$search.'%'); }
+        if ($search !== '') {
+            $st->bindValue(':q1', '%'.$search.'%');
+            $st->bindValue(':q2', '%'.$search.'%');
+            $st->bindValue(':q3', '%'.$search.'%');
+            /* Versión sin puntos ni espacios: "2 3 5 1 1" o "2.3.5.1.1" → "23511". */
+            $plano = preg_replace('/[.\s]/', '', $search);
+            $st->bindValue(':q4', '%'.$plano.'%');
+        }
         if ($meta !== '') $st->bindValue(':meta', $meta);
         if ($act  !== '') $st->bindValue(':act', $act);
         if ($fase !== null && in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true)) $st->bindValue(':fase', $fase);
@@ -445,7 +470,7 @@ class CmnQuery
     {
         $w = " WHERE 1=1 ";
         if ($tipo === 'B' || $tipo === 'S') $w .= " AND T.TIPO_BIEN = :tipo ";
-        if ($search !== '') $w .= " AND (T.NOMBRE_ITEM LIKE :q1 OR T.CLASIF_COD LIKE :q2 OR T.ESTADO_ORDEN LIKE :q3) ";
+        if ($search !== '') $w .= " AND (T.NOMBRE_ITEM LIKE :q1 OR T.CLASIF_COD LIKE :q2 OR T.ESTADO_ORDEN LIKE :q3 OR T.CLASIF_PLANO LIKE :q4 OR T.COD_PRODUCTO LIKE :q4) ";
         if ($meta !== '') $w .= " AND CONVERT(VARCHAR(50), T.META) = :meta ";
         if ($act  !== '') $w .= " AND T.ACTIV_OPERAT_COD = :act ";
         if (in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true))
@@ -627,6 +652,7 @@ class CmnQuery
         //    Ambos acotados a la meta + clasificador de la línea.
         $fases = $b(
             "SELECT DISTINCT 'Comprometido' fase, CASE WHEN oa.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END + CONVERT(VARCHAR,oa.NRO_ORDEN) doc,
+                    oa.NRO_ORDEN nro_orden,
                     CONVERT(VARCHAR(10), oa.FECHA_SIAF, 103) fecha, oi.PREC_TOT_SOLES monto
              FROM SIG_ORDEN_ADQUISICION oa
              JOIN SIG_ORDEN_ITEM oi ON oi.SEC_EJEC=oa.SEC_EJEC AND oi.ANO_EJE=oa.ANO_EJE
@@ -638,6 +664,7 @@ class CmnQuery
                AND oi.TIPO_BIEN=? AND oi.GRUPO_BIEN=? AND oi.CLASE_BIEN=? AND oi.FAMILIA_BIEN=? AND oi.ITEM_BIEN=?
              UNION ALL
              SELECT 'Devengado', 'Deveng. ' + CONVERT(VARCHAR,dv.NRO_DEVENGADO),
+                    dv.NRO_ORDEN nro_orden,
                     CONVERT(VARCHAR(10), dv.FECHA_REG, 103), di.VALOR_SOLES
              FROM SIG_DEVENGADO dv
              JOIN SIG_DEVENGADO_ITEM di ON di.SEC_EJEC=dv.SEC_EJEC AND di.ANO_EJE=dv.ANO_EJE AND di.NRO_DEVENGADO=dv.NRO_DEVENGADO
