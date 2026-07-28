@@ -4,50 +4,23 @@
  * Carga las variables de .env y define las constantes de la aplicación.
  * Sin dependencias: no requiere Composer ni vlucas/phpdotenv.
  *
+ * COMPATIBLE PHP 7.4: sin match(), sin str_contains, sin tipos mixed.
+ *
  * Uso:  require_once __DIR__ . '/config.php';
- *       (al inicio de index.php, dashboard.php, dashboard-api.php, Auth.php…)
  *
- * Es idempotente: puede incluirse varias veces sin errores de redeclaración,
- * porque Auth.php y las vistas lo van a pedir por su cuenta.
- *
- * ── DÓNDE VA EL .env (estilo Laravel) ────────────────────────────────
- * El .env se busca en este orden y gana el primero que exista:
- *
- *   1. UN NIVEL ARRIBA de esta carpeta   ← RECOMENDADO en el servidor
- *   2. En esta misma carpeta             ← cómodo para desarrollo local
- *
- * En el hosting, sube los archivos de la app a public_html/ y el .env
- * al costado (NO adentro):
- *
- *     /home/usuario/
- *     ├── .env               ← aquí: Apache no puede servirlo NUNCA,
- *     │                        porque está fuera del webroot
- *     └── public_html/
- *         ├── index.php
- *         ├── dashboard.php
- *         ├── .htaccess      ← segunda capa de protección
- *         └── …
- *
- * Así no importa la configuración de Apache ni ningún comando: un archivo
- * que no está bajo el DocumentRoot simplemente no tiene URL.
- *
- * El archivo .env NO se versiona (ver .gitignore). Cada máquina tiene el
- * suyo, copiado de .env.example.
+ * ── DÓNDE VA EL .env ──────────────────────────────────────────────────
+ * Se busca primero UN NIVEL ARRIBA (servidor, fuera del webroot) y si no,
+ * en esta misma carpeta (desarrollo local). El .env NO se versiona.
  */
 
 if (defined('SIGA_CONFIG_CARGADO')) return;
 define('SIGA_CONFIG_CARGADO', true);
 
-/* ── Lector de .env ──────────────────────────────────────────────────
-   Formato admitido:   CLAVE=valor
-                       CLAVE="valor con espacios"
-                       # comentario de línea
-   Las líneas vacías y los comentarios se ignoran. */
 if (!class_exists('Env')) {
     final class Env
     {
-        private static array $vars = [];
-        private static bool  $cargado = false;
+        private static $vars = [];
+        private static $cargado = false;
 
         /** Carga el PRIMER .env legible de la lista de rutas. */
         public static function cargar(string ...$rutas): void
@@ -61,7 +34,7 @@ if (!class_exists('Env')) {
 
             foreach (file($ruta, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) as $linea) {
                 $linea = trim($linea);
-                if ($linea === '' || $linea[0] === '#' || !str_contains($linea, '=')) continue;
+                if ($linea === '' || $linea[0] === '#' || strpos($linea, '=') === false) continue;
 
                 [$clave, $valor] = explode('=', $linea, 2);
                 $clave = trim($clave);
@@ -78,17 +51,16 @@ if (!class_exists('Env')) {
         }
 
         /** Valor de una variable, con valor por defecto y casteo básico. */
-        public static function get(string $clave, mixed $porDefecto = null): mixed
+        public static function get(string $clave, $porDefecto = null)
         {
             $v = self::$vars[$clave] ?? getenv($clave);
             if ($v === false || $v === null || $v === '') return $porDefecto;
 
-            return match (strtolower((string)$v)) {
-                'true','on','yes'  => true,
-                'false','off','no' => false,
-                'null'             => null,
-                default            => $v,
-            };
+            $l = strtolower((string)$v);
+            if ($l === 'true'  || $l === 'on'  || $l === 'yes') return true;
+            if ($l === 'false' || $l === 'off' || $l === 'no')  return false;
+            if ($l === 'null') return null;
+            return $v;
         }
 
         public static function int(string $clave, int $porDefecto): int
@@ -106,8 +78,7 @@ Env::cargar(
 );
 
 /* ── Base de datos ───────────────────────────────────────────────────
-   DB_USER y DB_PASS vacíos = autenticación Windows (trusted connection),
-   que es como está configurado el servidor del SIGA. */
+   DB_USER y DB_PASS vacíos = autenticación Windows (trusted connection). */
 define('DB_SERVER', Env::get('DB_SERVER', 'localhost'));
 define('DB_NAME',   Env::get('DB_NAME',   'SIGA_104'));
 define('DB_USER',   Env::get('DB_USER',   ''));
@@ -127,10 +98,8 @@ define('MAX_ROWS',       Env::int('MAX_ROWS', 100000));
 define('SESION_MINUTOS', Env::int('SESION_MINUTOS', 120));
 
 /* ── Errores ─────────────────────────────────────────────────────────
-   En producción nunca se muestran en pantalla: podrían filtrar la cadena
-   de conexión o nombres de tablas del SIGA. Se registran en el log.
-   El log también intenta vivir FUERA del webroot; si no puede, cae a
-   la carpeta local logs/ (que el .htaccess bloquea). */
+   En producción nunca se muestran en pantalla. Se registran en el log,
+   que intenta vivir FUERA del webroot; si no puede, cae a logs/ local. */
 if (APP_DEBUG) {
     error_reporting(E_ALL);
     ini_set('display_errors', '1');

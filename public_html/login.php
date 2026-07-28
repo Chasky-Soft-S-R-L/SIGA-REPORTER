@@ -2,6 +2,7 @@
 /**
  * VISTA · Login del SIGA-REPORTER
  * Rediseño con la identidad visual de pagos.unas.edu.pe
+ * Compatible con PHP 7.4 (sin str_starts_with).
  */
 require __DIR__ . '/Auth.php';
 
@@ -18,7 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $error = 'La sesión expiró. Vuelva a intentarlo.';
     } else {
         $r = $auth->login($usuarioPrev, (string)($_POST['clave'] ?? ''));
-        if ($r['ok']) { header('Location: ' . (str_starts_with($next, 'http') ? 'index.php' : $next)); exit; }
+        if ($r['ok']) { header('Location: ' . (strpos($next, 'http') === 0 ? 'index.php' : $next)); exit; }
         $error = $r['msg'];
     }
 }
@@ -44,13 +45,10 @@ tailwind.config={theme:{extend:{colors:{
   :root{ --teal:rgb(26,187,156); --teal-dark:rgb(20,150,125); }
   body{font-family:'Inter',system-ui,sans-serif;}
   .display{font-family:'Poppins',sans-serif;}
-
-  /* Panel izquierdo */
   .panel{
     background:linear-gradient(160deg,rgb(38,201,170) 0%,var(--teal) 45%,var(--teal-dark) 100%);
     position:relative; overflow:hidden;
   }
-  /* Anillos decorativos (igual que el portal de pagos) */
   .panel::after{
     content:''; position:absolute; right:-140px; bottom:-160px;
     width:520px; height:520px; border-radius:50%;
@@ -64,14 +62,11 @@ tailwind.config={theme:{extend:{colors:{
   }
   .dot{ animation:pulse 2s ease-in-out infinite }
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-
   .rise{animation:rise .45s cubic-bezier(.2,.8,.2,1) both}
   .rise-2{animation-delay:.08s}
   @keyframes rise{from{transform:translateY(14px);opacity:0}to{transform:none;opacity:1}}
-
   .shake{animation:sh .35s}
   @keyframes sh{0%,100%{transform:translateX(0)}25%{transform:translateX(-5px)}75%{transform:translateX(5px)}}
-
   @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -79,7 +74,6 @@ tailwind.config={theme:{extend:{colors:{
 
 <div class="min-h-screen grid lg:grid-cols-[42%_58%]">
 
-  <!-- ══════════ IZQUIERDA · Marca ══════════ -->
   <aside class="panel hidden lg:flex flex-col justify-between p-10 xl:p-14 text-white">
 
     <div class="flex items-center gap-3">
@@ -125,11 +119,9 @@ tailwind.config={theme:{extend:{colors:{
     </div>
   </aside>
 
-  <!-- ══════════ DERECHA · Formulario ══════════ -->
   <main class="flex items-center justify-center p-6 sm:p-10">
     <div class="w-full max-w-md rise">
 
-      <!-- Marca compacta solo en móvil -->
       <div class="lg:hidden flex items-center gap-3 mb-8">
         <div class="w-11 h-11 rounded-2xl grid place-items-center shadow-lg"
              style="background:linear-gradient(135deg,var(--teal),var(--teal-dark))">
@@ -149,7 +141,6 @@ tailwind.config={theme:{extend:{colors:{
         <input type="hidden" name="next" value="<?= htmlspecialchars($next) ?>">
 
         <div class="rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
-          <!-- Cabecera de la tarjeta -->
           <div class="flex items-center gap-3 px-5 py-4 text-white"
                style="background:linear-gradient(135deg,var(--teal),var(--teal-dark))">
             <div class="w-9 h-9 rounded-lg bg-white/20 grid place-items-center">
@@ -169,7 +160,6 @@ tailwind.config={theme:{extend:{colors:{
                 <span><?= htmlspecialchars($error) ?></span>
               </div>
             <?php endif; ?>
-
             <div>
               <label for="usuario" class="block text-[11px] font-semibold tracking-wide uppercase text-slate-500 mb-1.5">Usuario</label>
               <div class="relative">
