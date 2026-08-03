@@ -284,19 +284,22 @@ class ExportService
     }
 
     /**
-     * "Falta ejecutar" con el MISMO nivel de detalle que la tabla oficial
-     * (FF/Rb + Meta + Clasificador + Área), no solo agregado por clasificador.
-     * Motivo: dentro de un mismo clasificador, un ítem puede haberse ejecutado
-     * al 100% y otro haber quedado con saldo (p.ej. se compró más barato de lo
-     * programado) — ese saldo también es real y usable, y se pierde si solo se
-     * ve el total del clasificador.
+     * Detalle de la DIFERENCIA (Programado - Ejecutado) con el MISMO nivel de
+     * agrupación que la tabla oficial (FF/Rb + Meta + Clasificador + Área), no
+     * solo agregado por clasificador. Motivo: dentro de un mismo clasificador,
+     * un ítem puede haberse ejecutado al 100% y otro haber quedado con saldo
+     * (p.ej. se compró más barato de lo programado) — ese saldo también es
+     * real y usable, y se pierde si solo se ve el total del clasificador.
      *
-     * El "saldo" es exactamente la misma DIFERENCIA de la tabla principal
-     * (Programado - Ejecutado, confirmada por el área usuaria) sumada por
-     * grupo — una sola columna, nada de Modificado ni Ejecutado por separado.
+     * Se incluyen Programado y Ejecutado como columnas propias (no solo el
+     * Saldo ya calculado), para que quede explícito CÓMO se llega a cada
+     * monto: Saldo = Programado - Ejecutado, fila por fila. Por el mismo
+     * motivo se incluyen TODOS los grupos, también los que quedaron con saldo
+     * negativo (sobregiro) — no se ocultan ni se resumen aparte, se ven en su
+     * propia fila con el detalle completo.
+     *
      * Se calcula sobre TODAS las filas del cuadro (no solo las que ya tienen
-     * ejecución), porque un ítem sin ejecución también aporta saldo pendiente.
-     * Reutilizado por pdf(); sin consulta aparte al SIGA.
+     * ejecución). Reutilizado por pdf(); sin consulta aparte al SIGA.
      */
     private static function saldoPorGrupo(array $rows): array
     {
@@ -312,13 +315,16 @@ class ExportService
                     'meta'  => str_pad((string)($r['META'] ?? ''), 4, '0', STR_PAD_LEFT),
                     'clas'  => ($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? ''),
                     'area'  => ($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? ''),
+                    'prog'  => 0.0,
+                    'ejec'  => 0.0,
                     'saldo' => 0.0,
                 ];
             }
-            $g[$k]['saldo'] += (float)($r['DIFERENCIA'] ?? 0);
+            $g[$k]['prog']  += (float)($r['IMPORTE_PROG'] ?? 0);
+            $g[$k]['ejec']  += (float)($r['IMPORTE_EJEC'] ?? 0);
+            $g[$k]['saldo'] += (float)($r['DIFERENCIA']   ?? 0);
         }
-        // Solo grupos con saldo real por ejecutar (positivo).
-        $g = array_values(array_filter($g, fn($x) => $x['saldo'] > 0.005));
+        $g = array_values($g);
         usort($g, function ($a, $b) {
             return [$a['ff'], $a['meta'], $a['clas'], $a['area']]
                <=> [$b['ff'], $b['meta'], $b['clas'], $b['area']];
@@ -349,24 +355,16 @@ class ExportService
         });
         $total = array_sum(array_map(fn($r) => (float)($r['IMPORTE_EJEC'] ?? 0), $ejec));
 
-        // "Falta ejecutar" con el mismo detalle que la tabla oficial (FF/Rb+Meta+
-        // Clasificador+Área): usa TODAS las filas ($rows), no solo $ejec, porque
-        // un ítem sin ejecución también puede tener saldo pendiente.
+        // Detalle de la DIFERENCIA (Programado - Ejecutado) con el mismo nivel
+        // de agrupación que la tabla oficial (FF/Rb+Meta+Clasificador+Área):
+        // usa TODAS las filas ($rows), no solo $ejec, e incluye también los
+        // grupos con saldo negativo (sobregiro) — cada fila trae Programado y
+        // Ejecutado propios, así se ve cómo se llega al Saldo sin necesidad de
+        // un resumen aparte.
         $saldos     = self::saldoPorGrupo($rows);
+        $totalProg  = array_sum(array_column($saldos, 'prog'));
+        $totalEjecG = array_sum(array_column($saldos, 'ejec'));
         $totalSaldo = array_sum(array_column($saldos, 'saldo'));
-
-        // Desglose de la DIFERENCIA (Programado - Ejecutado) sobre TODAS las
-        // filas: cuánto es saldo a favor (todavía no se ejecuta) y cuánto es
-        // sobregiro (se ejecutó más de lo programado). DIFERENCIA total =
-        // favor - sobregiro, siempre. Se muestra para explicar cómo se llega
-        // al neteo, no solo mostrarlo como una caja negra.
-        $difFavor = 0.0; $difSobregiro = 0.0; $cFavor = 0; $cSobregiro = 0;
-        foreach ($rows as $r) {
-            $d = (float)($r['DIFERENCIA'] ?? 0);
-            if ($d > 0.005)      { $difFavor     += $d;  $cFavor++;     }
-            elseif ($d < -0.005) { $difSobregiro += -$d; $cSobregiro++; }
-        }
-        $difTotal = $difFavor - $difSobregiro;
 
         echo '<!doctype html><html lang="es"><head><meta charset="utf-8">';
         echo '<title>Ejecución por Área Usuaria ' . htmlspecialchars((string)$anio) . '</title>';
@@ -385,9 +383,6 @@ class ExportService
             .pendTitulo{background:#1f2937;color:#fff;font-weight:bold;font-size:9.5px;padding:5px 7px;margin-top:16px;
                         display:flex;align-items:center;gap:6px;page-break-inside:avoid}
             .pendTabla{page-break-inside:auto}
-            .difBox{display:flex;gap:10px;margin-top:10px;page-break-inside:avoid}
-            .difCard{flex:1;border-radius:4px;padding:6px 8px;font-size:8.5px}
-            .difCard b{display:block;font-size:11px;margin-top:2px}
             .pendTabla tr{page-break-inside:avoid;page-break-after:auto}
             @media print{@page{size:A4 landscape;margin:8mm}}
         </style></head><body onload="window.print()">';
@@ -446,41 +441,41 @@ class ExportService
            . '</tr></tfoot></table>';
         echo '<p style="font-size:7.5px;color:#64748b;margin-top:6px">Reporte generado desde SIGA-REPORTER · muestra únicamente los ítems con fase de compromiso ejecutada.</p>';
 
-        // ── CÓMO SE LLEGA A LA DIFERENCIA: Saldo a favor − Sobregiro ──
-        echo '<div class="difBox">'
-           . '<div class="difCard" style="background:#ecfdf5;border:1px solid #bbf7d0;color:#047857">SALDO A FAVOR &nbsp;·&nbsp; ' . $cFavor . ' ítems'
-             . '<b>S/ ' . number_format($difFavor, 2) . '</b></div>'
-           . '<div class="difCard" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c">SOBREGIRO &nbsp;·&nbsp; ' . $cSobregiro . ' ítems'
-             . '<b>S/ ' . number_format($difSobregiro, 2) . '</b></div>'
-           . '<div class="difCard" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b">DIFERENCIA TOTAL &nbsp;·&nbsp; Programado − Ejecutado'
-             . '<b>S/ ' . number_format($difTotal, 2) . '</b></div>'
-           . '</div>'
-           . '<p style="font-size:7.5px;color:#64748b;margin-top:3px">Diferencia total = Saldo a favor − Sobregiro (S/ ' . number_format($difFavor, 2) . ' − S/ ' . number_format($difSobregiro, 2) . ' = S/ ' . number_format($difTotal, 2) . ').</p>';
-
-        // ── FALTA EJECUTAR · MISMO DETALLE QUE LA TABLA OFICIAL (debajo de ella) ──
+        // ── DIFERENCIA POR FF/Rb · META · CLASIFICADOR · ÁREA (debajo de la tabla oficial) ──
+        // Se detalla con columnas (Programado, Ejecutado, Saldo) en vez de un
+        // resumen aparte: así se ve fila por fila cómo se llega a cada monto,
+        // Saldo = Programado - Ejecutado. Incluye TODOS los grupos, también
+        // los sobregirados (Saldo negativo, resaltado en rojo).
         if ($saldos) {
-            echo '<div class="pendTitulo">⏳ FALTA EJECUTAR · SALDO POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
+            echo '<div class="pendTitulo">📊 DIFERENCIA (PROGRAMADO − EJECUTADO) POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
             echo '<table class="pendTabla"><thead><tr>'
-               . '<th style="width:6%">FF/Rb</th>'
-               . '<th style="width:22%">Meta</th>'
-               . '<th style="width:38%">Clasificador de Gasto</th>'
-               . '<th style="width:22%">Área Usuaria</th>'
-               . '<th class="num" style="width:12%">Saldo (S/)</th>'
+               . '<th style="width:5%">FF/Rb</th>'
+               . '<th style="width:16%">Meta</th>'
+               . '<th style="width:32%">Clasificador de Gasto</th>'
+               . '<th style="width:17%">Área Usuaria</th>'
+               . '<th class="num" style="width:10%">Programado (S/)</th>'
+               . '<th class="num" style="width:10%">Ejecutado (S/)</th>'
+               . '<th class="num" style="width:10%">Saldo (S/)</th>'
                . '</tr></thead><tbody>';
             foreach ($saldos as $s) {
-                echo '<tr>'
+                $neg = $s['saldo'] < -0.005;
+                echo '<tr' . ($neg ? ' style="background:#fef2f2"' : '') . '>'
                    . '<td>' . htmlspecialchars($s['ff']) . '</td>'
                    . '<td>' . htmlspecialchars($s['meta']) . '</td>'
                    . '<td>' . htmlspecialchars($s['clas']) . '</td>'
                    . '<td>' . htmlspecialchars($s['area']) . '</td>'
-                   . '<td class="num">' . number_format($s['saldo'], 2) . '</td>'
+                   . '<td class="num">' . number_format($s['prog'], 2) . '</td>'
+                   . '<td class="num">' . number_format($s['ejec'], 2) . '</td>'
+                   . '<td class="num" style="' . ($neg ? 'color:#b91c1c;font-weight:bold' : '') . '">' . number_format($s['saldo'], 2) . '</td>'
                    . '</tr>';
             }
             echo '</tbody><tfoot><tr>'
                . '<td colspan="4" style="text-align:right">TOTAL &nbsp; S/.</td>'
+               . '<td class="num">' . number_format($totalProg, 2) . '</td>'
+               . '<td class="num">' . number_format($totalEjecG, 2) . '</td>'
                . '<td class="num">' . number_format($totalSaldo, 2) . '</td>'
                . '</tr></tfoot></table>';
-            echo '<p style="font-size:7.5px;color:#64748b;margin-top:4px">Saldo = DIFERENCIA (Importe CMN Programado − Importe CMN Ejecutado), agrupado igual que el reporte oficial (FF/Rb + Meta + Clasificador + Área). Solo se muestran grupos con saldo positivo.</p>';
+            echo '<p style="font-size:7.5px;color:#64748b;margin-top:4px">Saldo = Importe CMN Programado − Importe CMN Ejecutado, agrupado igual que el reporte oficial (FF/Rb + Meta + Clasificador + Área). Filas en rojo = saldo negativo (sobregiro: se ejecutó más de lo programado).</p>';
         }
 
         echo '</body></html>';

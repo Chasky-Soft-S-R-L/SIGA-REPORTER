@@ -600,45 +600,6 @@ class CmnQuery
         return $st->fetchAll();
     }
 
-    /**
-     * Desglose de la columna DIFERENCIA (Programado - Ejecutado) en sus dos
-     * componentes, para que en pantalla y PDF se explique CÓMO se llega al
-     * total, en vez de mostrar solo el neteo (que un solo ítem sobregirado
-     * puede volver negativo y esconder los saldos a favor de los demás):
-     *   - favor     = Σ Diferencia de los ítems con Diferencia > 0 (todavía
-     *                 tienen programado sin ejecutar)
-     *   - sobregiro = Σ |Diferencia| de los ítems con Diferencia < 0 (se
-     *                 ejecutó más de lo programado)
-     *   DIFERENCIA_total = favor - sobregiro (siempre se cumple).
-     * Respeta TODOS los filtros activos, sobre el universo completo (no solo
-     * la página visible).
-     */
-    public function resumenDiferencia(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
-                                      string $tipo = '', string $search = '', $meta = '', $act = '',
-                                      $clasif = '', $fuente = '', string $ejec = ''): array
-    {
-        $inner = $this->innerSql(!!$ccosto);
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, '', $clasif, $fuente, $ejec);
-        $sql = "SELECT
-                    SUM(CASE WHEN T.DIFERENCIA >  0.005 THEN T.DIFERENCIA  ELSE 0 END) AS favor,
-                    SUM(CASE WHEN T.DIFERENCIA < -0.005 THEN -T.DIFERENCIA ELSE 0 END) AS sobregiro,
-                    SUM(CASE WHEN T.DIFERENCIA >  0.005 THEN 1 ELSE 0 END) AS c_favor,
-                    SUM(CASE WHEN T.DIFERENCIA < -0.005 THEN 1 ELSE 0 END) AS c_sobregiro
-                FROM ({$inner}) T {$w}";
-        $st = $this->db->prepare($sql);
-        $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
-        $this->bindFiltros($st, $tipo, $search, $meta, $act, null, $clasif, $fuente);
-        $st->execute();
-        $r = $st->fetch() ?: [];
-        return [
-            'favor'      => (float)($r['favor']      ?? 0),
-            'sobregiro'  => (float)($r['sobregiro']  ?? 0),
-            'cFavor'     => (int)($r['c_favor']      ?? 0),
-            'cSobregiro' => (int)($r['c_sobregiro']  ?? 0),
-        ];
-    }
-    
-
     public function historial(int $anioProg, int $anioEjec, int $secEjec, string $ccosto,
                               string $tipo, string $g, string $c, string $f, string $it,
                               int $secFunc, string $clasificador): array
