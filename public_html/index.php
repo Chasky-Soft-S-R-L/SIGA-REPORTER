@@ -164,7 +164,8 @@ if ($action === 'data') {
     try {
         $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente,$fEjec);
         $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente,$fEjec);
-        echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum], JSON_UNESCAPED_UNICODE);
+        $dif = $q->resumenDiferencia($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente,$fEjec);
+        echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum,'diferencia'=>$dif], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[index/data] ' . $e->getMessage());
         echo json_encode(['error'=>$errPublico($e)], JSON_UNESCAPED_UNICODE);
@@ -744,7 +745,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
      es la cantidad de ítems en esa fase, que es lo que filtra al hacer clic. */
   function renderChips(sum){
     const map={};let tc=0,tProg=0,tMod=0,tEjec=0;
-    sum.forEach(s=>{map[s.fase]={c:+s.c};tc+=+s.c;tProg+=+s.prog;tMod+=+s.monto;tEjec+=+s.ejec;});
+    sum.forEach(s=>{map[s.fase]={c:+s.c,prog:+s.prog,monto:+s.monto,ejec:+s.ejec};tc+=+s.c;tProg+=+s.prog;tMod+=+s.monto;tEjec+=+s.ejec;});
     const TOT={PROGRAMADO:tProg,MODIFICADO:tMod,EJECUTADO:tEjec};
     chipsEl.innerHTML='';
     chipsEl.appendChild(chip('Todos',tc,tMod,'bg-gray-800 text-white','ring-gray-800',st.fase==='',
@@ -758,12 +759,29 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});
     /* Badge PENDIENTE (rojo, mayúscula): reemplaza al selector "Ejecutado/No
        ejecutado". Pendiente = ítems sin ejecución (IMPORTE_EJEC = 0), o sea
-       todo lo que NO cae en la fase Ejecutado. El monto es el saldo que falta
-       por ejecutar (Modificado - Ejecutado). Clic para filtrar/quitar filtro. */
-    const eC=map.EJECUTADO?+map.EJECUTADO.c:0, pendC=Math.max(0,tc-eC), pendMonto=Math.max(0,tMod-tEjec);
+       todo lo que NO cae en la fase Ejecutado. El monto es la suma de lo
+       Programado en ESOS ítems (fases Programado + Modificado): como ahí
+       Ejecutado=0, para cada uno Diferencia=Programado — mismo criterio que
+       la columna DIFERENCIA, no un neteo global aparte. Por eso este número
+       no tiene que coincidir con el TOTAL PÁGINA de Diferencia (que resta
+       también los ítems sobregirados) ni con "Falta ejecutar" del PDF (que
+       solo suma saldos positivos por clasificador): cada uno mide algo
+       distinto a propósito. Clic para filtrar/quitar filtro. */
+    const progP=map.PROGRAMADO?.prog||0, progM=map.MODIFICADO?.prog||0;
+    const pendC=(map.PROGRAMADO?.c||0)+(map.MODIFICADO?.c||0), pendMonto=progP+progM;
     chipsEl.appendChild(chip('PENDIENTE',pendC,pendMonto,'bg-red-100 text-red-700 uppercase tracking-wide','ring-red-500',st.ejec==='no',
       ()=>{st.ejec=(st.ejec==='no'?'':'no');st.page=1;load();},'bg-red-500',
-      'Ítems sin ejecución (IMPORTE_EJEC = 0) · saldo por ejecutar S/ '+money(pendMonto)+' · clic para filtrar'));
+      'Programado en ítems sin ejecución todavía (Diferencia = Programado, ya que Ejecutado = 0) · no incluye sobregiros de otros ítems · clic para filtrar'));
+    /* Badges informativas (no filtran, solo explican): la Diferencia total no
+       es un neteo opaco, es Saldo a favor MENOS Sobregiro. Se muestran los
+       dos componentes por separado para que ambos números "cuadren" con el
+       total de la columna DIFERENCIA. */
+    if(dif){
+      chipsEl.appendChild(chip('SALDO A FAVOR',dif.cFavor,dif.favor,'bg-emerald-100 text-emerald-700 uppercase tracking-wide','ring-emerald-500',false,
+        null,'bg-emerald-500','Σ Diferencia de ítems con Diferencia positiva (aún no se ejecuta todo lo programado)'));
+      chipsEl.appendChild(chip('SOBREGIRO',dif.cSobregiro,dif.sobregiro,'bg-rose-100 text-rose-700 uppercase tracking-wide','ring-rose-500',false,
+        null,'bg-rose-500','Σ |Diferencia| de ítems con Diferencia negativa (se ejecutó más de lo programado) · Diferencia total = Saldo a favor − Sobregiro = S/ '+money(dif.favor-dif.sobregiro)));
+    }
   }
 
   function chip(label,count,monto,cls,ring,active,onclick,dot,tip){const b=document.createElement('button');if(tip)b.title=tip;b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all '+cls+(active?(' ring-2 ring-offset-1 '+ring):' opacity-90 hover:opacity-100');b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full '+dot+'"></span>':'')+'<span>'+label+'</span><span class="opacity-60">·</span><span>'+count+'</span><span class="opacity-60">S/ '+money(monto)+'</span>';b.onclick=onclick;return b;}
@@ -987,8 +1005,17 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     const tP=vista.reduce((s,d)=>s+ +d.IMPORTE_PROG,0),tM=vista.reduce((s,d)=>s+ +d.IMPORTE_MOD,0),
           tE=vista.reduce((s,d)=>s+ +d.IMPORTE_EJEC,0),tD=vista.reduce((s,d)=>s+ +d.DIFERENCIA,0),
           tDev=vista.reduce((s,d)=>s+ +d.DEVENGADO,0),tSaldo=vista.reduce((s,d)=>s+ +d.SALDO_DEVENGAR,0);
+    /* Desglose de la Diferencia de ESTA página: Saldo a favor (positivos) y
+       Sobregiro (negativos, en positivo) — para que quede explícito cómo se
+       llega al total (TOTAL = Saldo a favor − Sobregiro). */
+    const tFavor=vista.reduce((s,d)=>{const v=+d.DIFERENCIA;return s+(v>0.005?v:0);},0);
+    const tSobre=vista.reduce((s,d)=>{const v=+d.DIFERENCIA;return s+(v<-0.005?-v:0);},0);
     tfootEl.innerHTML=rowTotalesMark('TOTAL PÁGINA',{P:tP,M:tM,E:tE,D:tD,Dev:tDev,Saldo:tSaldo},{
-      trCls:'bg-gray-800 text-white font-bold',lblCls:'tracking-widest text-[11px]',difCol:DIF_CLARO});
+      trCls:'bg-gray-800 text-white font-bold',lblCls:'tracking-widest text-[11px]',difCol:DIF_CLARO})
+      +rowTotalesMark('Saldo a favor (página)',{P:null,M:null,E:null,D:tFavor,Dev:null,Saldo:null},{
+        trCls:'bg-emerald-50 text-emerald-700 font-semibold text-[11px]',lblCls:'tracking-wide',lblStyle:'',difCol:'#059669'})
+      +rowTotalesMark('Sobregiro (página)',{P:null,M:null,E:null,D:tSobre,Dev:null,Saldo:null},{
+        trCls:'bg-rose-50 text-rose-700 font-semibold text-[11px]',lblCls:'tracking-wide',lblStyle:'',difCol:'#dc2626'});
     selBar();
     syncSelAll(vista);
   }
@@ -1035,7 +1062,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       if(r.redirected || !ct.includes('json')){ location.href='login.php?next=index.php'; return; }
       const j=await r.json();
       if(j.error){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-triangle-exclamation text-red-500 mr-1"></i><span class="text-red-600">'+ec(j.error)+'</span></td></tr>';tfootEl.innerHTML='';return;}
-      last=j;consultado=true;renderChips(j.summary);paint();renderPager();
+      last=j;consultado=true;renderChips(j.summary,j.diferencia);paint();renderPager();
     }catch(e){tbodyEl.innerHTML='<tr><td colspan="'+Math.max(1,COLS().length)+'" class="px-3 py-6 text-center"><i class="fa-solid fa-plug-circle-xmark text-red-500 mr-1"></i><span class="text-red-600">Error de red</span></td></tr>';tfootEl.innerHTML='';}
     finally{hideLoad();}
   }

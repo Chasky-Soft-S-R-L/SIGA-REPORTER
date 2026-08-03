@@ -355,6 +355,19 @@ class ExportService
         $saldos     = self::saldoPorGrupo($rows);
         $totalSaldo = array_sum(array_column($saldos, 'saldo'));
 
+        // Desglose de la DIFERENCIA (Programado - Ejecutado) sobre TODAS las
+        // filas: cuánto es saldo a favor (todavía no se ejecuta) y cuánto es
+        // sobregiro (se ejecutó más de lo programado). DIFERENCIA total =
+        // favor - sobregiro, siempre. Se muestra para explicar cómo se llega
+        // al neteo, no solo mostrarlo como una caja negra.
+        $difFavor = 0.0; $difSobregiro = 0.0; $cFavor = 0; $cSobregiro = 0;
+        foreach ($rows as $r) {
+            $d = (float)($r['DIFERENCIA'] ?? 0);
+            if ($d > 0.005)      { $difFavor     += $d;  $cFavor++;     }
+            elseif ($d < -0.005) { $difSobregiro += -$d; $cSobregiro++; }
+        }
+        $difTotal = $difFavor - $difSobregiro;
+
         echo '<!doctype html><html lang="es"><head><meta charset="utf-8">';
         echo '<title>Ejecución por Área Usuaria ' . htmlspecialchars((string)$anio) . '</title>';
         echo '<style>
@@ -372,6 +385,9 @@ class ExportService
             .pendTitulo{background:#1f2937;color:#fff;font-weight:bold;font-size:9.5px;padding:5px 7px;margin-top:16px;
                         display:flex;align-items:center;gap:6px;page-break-inside:avoid}
             .pendTabla{page-break-inside:auto}
+            .difBox{display:flex;gap:10px;margin-top:10px;page-break-inside:avoid}
+            .difCard{flex:1;border-radius:4px;padding:6px 8px;font-size:8.5px}
+            .difCard b{display:block;font-size:11px;margin-top:2px}
             .pendTabla tr{page-break-inside:avoid;page-break-after:auto}
             @media print{@page{size:A4 landscape;margin:8mm}}
         </style></head><body onload="window.print()">';
@@ -430,9 +446,20 @@ class ExportService
            . '</tr></tfoot></table>';
         echo '<p style="font-size:7.5px;color:#64748b;margin-top:6px">Reporte generado desde SIGA-REPORTER · muestra únicamente los ítems con fase de compromiso ejecutada.</p>';
 
+        // ── CÓMO SE LLEGA A LA DIFERENCIA: Saldo a favor − Sobregiro ──
+        echo '<div class="difBox">'
+           . '<div class="difCard" style="background:#ecfdf5;border:1px solid #bbf7d0;color:#047857">SALDO A FAVOR &nbsp;·&nbsp; ' . $cFavor . ' ítems'
+             . '<b>S/ ' . number_format($difFavor, 2) . '</b></div>'
+           . '<div class="difCard" style="background:#fef2f2;border:1px solid #fecaca;color:#b91c1c">SOBREGIRO &nbsp;·&nbsp; ' . $cSobregiro . ' ítems'
+             . '<b>S/ ' . number_format($difSobregiro, 2) . '</b></div>'
+           . '<div class="difCard" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#1e293b">DIFERENCIA TOTAL &nbsp;·&nbsp; Programado − Ejecutado'
+             . '<b>S/ ' . number_format($difTotal, 2) . '</b></div>'
+           . '</div>'
+           . '<p style="font-size:7.5px;color:#64748b;margin-top:3px">Diferencia total = Saldo a favor − Sobregiro (S/ ' . number_format($difFavor, 2) . ' − S/ ' . number_format($difSobregiro, 2) . ' = S/ ' . number_format($difTotal, 2) . ').</p>';
+
         // ── FALTA EJECUTAR · MISMO DETALLE QUE LA TABLA OFICIAL (debajo de ella) ──
         if ($saldos) {
-            echo '<div class="pendTitulo"> FALTA EJECUTAR · SALDO POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
+            echo '<div class="pendTitulo">⏳ FALTA EJECUTAR · SALDO POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
             echo '<table class="pendTabla"><thead><tr>'
                . '<th style="width:6%">FF/Rb</th>'
                . '<th style="width:22%">Meta</th>'

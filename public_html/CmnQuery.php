@@ -481,11 +481,14 @@ class CmnQuery
     /**
      * $ejec: 'si' = solo ítems con ejecución (IMPORTE_EJEC > 0, "lo que sí se
      * compró") · 'no' = solo ítems sin ejecución (IMPORTE_EJEC = 0, "lo que NO
-     * se compró") · '' = sin filtrar (ambos). Es literal fijo por whitelist
-     * (in_array), no necesita bind param.
+     * se compró") · '' = sin filtrar (ambos).
+     * $sobre: 'si' = solo ítems SOBREGIRADOS (DIFERENCIA = Programado -
+     * Ejecutado negativa, o sea se ejecutó más de lo programado) · '' = sin
+     * filtrar. Ambos son literales fijos por whitelist (in_array), no
+     * necesitan bind param.
      */
     private function whereFiltros(string $tipo, string $search, $meta, $act, string $fase,
-                                  $clasif = '', $fuente = '', string $ejec = ''): string
+                                  $clasif = '', $fuente = '', string $ejec = '', string $sobre = ''): string
     {
         $w = " WHERE 1=1 ";
         if ($tipo === 'B' || $tipo === 'S') $w .= " AND T.TIPO_BIEN = :tipo ";
@@ -503,6 +506,7 @@ class CmnQuery
             $w .= " AND (" . $this->faseExpr('T') . ") = :fase ";
         if ($ejec === 'si')      $w .= " AND T.IMPORTE_EJEC > 0.005 ";
         elseif ($ejec === 'no')  $w .= " AND ISNULL(T.IMPORTE_EJEC,0) <= 0.005 ";
+        if ($sobre === 'si')     $w .= " AND (T.IMPORTE_PROG - T.IMPORTE_EJEC) < -0.005 ";
         return $w;
     }
 
@@ -544,11 +548,11 @@ class CmnQuery
     public function rows(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
                          string $tipo = '', string $search = '', $meta = '', $act = '',
                          string $fase = '', string $sort = 'mod_desc', int $page = 1, int $perPage = 50,
-                         $clasif = '', $fuente = '', string $ejec = ''): array
+                         $clasif = '', $fuente = '', string $ejec = '', string $sobre = ''): array
     {
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase, $clasif, $fuente, $ejec);
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase, $clasif, $fuente, $ejec, $sobre);
         // PHP 7.4: match() reemplazado por if/else.
         $order = 'T.IMPORTE_MOD DESC';
         if ($sort === 'mod_asc')       $order = 'T.IMPORTE_MOD ASC';
@@ -595,6 +599,45 @@ class CmnQuery
         $st->execute();
         return $st->fetchAll();
     }
+
+    /**
+     * Desglose de la columna DIFERENCIA (Programado - Ejecutado) en sus dos
+     * componentes, para que en pantalla y PDF se explique CÓMO se llega al
+     * total, en vez de mostrar solo el neteo (que un solo ítem sobregirado
+     * puede volver negativo y esconder los saldos a favor de los demás):
+     *   - favor     = Σ Diferencia de los ítems con Diferencia > 0 (todavía
+     *                 tienen programado sin ejecutar)
+     *   - sobregiro = Σ |Diferencia| de los ítems con Diferencia < 0 (se
+     *                 ejecutó más de lo programado)
+     *   DIFERENCIA_total = favor - sobregiro (siempre se cumple).
+     * Respeta TODOS los filtros activos, sobre el universo completo (no solo
+     * la página visible).
+     */
+    public function resumenDiferencia(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
+                                      string $tipo = '', string $search = '', $meta = '', $act = '',
+                                      $clasif = '', $fuente = '', string $ejec = ''): array
+    {
+        $inner = $this->innerSql(!!$ccosto);
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, '', $clasif, $fuente, $ejec);
+        $sql = "SELECT
+                    SUM(CASE WHEN T.DIFERENCIA >  0.005 THEN T.DIFERENCIA  ELSE 0 END) AS favor,
+                    SUM(CASE WHEN T.DIFERENCIA < -0.005 THEN -T.DIFERENCIA ELSE 0 END) AS sobregiro,
+                    SUM(CASE WHEN T.DIFERENCIA >  0.005 THEN 1 ELSE 0 END) AS c_favor,
+                    SUM(CASE WHEN T.DIFERENCIA < -0.005 THEN 1 ELSE 0 END) AS c_sobregiro
+                FROM ({$inner}) T {$w}";
+        $st = $this->db->prepare($sql);
+        $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
+        $this->bindFiltros($st, $tipo, $search, $meta, $act, null, $clasif, $fuente);
+        $st->execute();
+        $r = $st->fetch() ?: [];
+        return [
+            'favor'      => (float)($r['favor']      ?? 0),
+            'sobregiro'  => (float)($r['sobregiro']  ?? 0),
+            'cFavor'     => (int)($r['c_favor']      ?? 0),
+            'cSobregiro' => (int)($r['c_sobregiro']  ?? 0),
+        ];
+    }
+    
 
     public function historial(int $anioProg, int $anioEjec, int $secEjec, string $ccosto,
                               string $tipo, string $g, string $c, string $f, string $it,
