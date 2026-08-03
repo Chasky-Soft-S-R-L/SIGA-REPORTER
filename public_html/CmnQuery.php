@@ -11,10 +11,16 @@
  *   - Modificado = el vigente difiere del original (IMPORTE_MOD <> IMPORTE_PROG)
  *   - Programado = el resto
  *
+ * FILTRO EJECUTADO/NO EJECUTADO ($ejec): 'si' = solo ítems con IMPORTE_EJEC > 0
+ * (lo que sí se compró) · 'no' = solo ítems con IMPORTE_EJEC = 0 (lo que NO se
+ * compró) · '' = ambos. Se aplica en whereFiltros() y por lo tanto afecta a
+ * rows() y summary() por igual.
+ *
  * MODELO DE MONTOS (vista de Presupuestos):
  *   IMPORTE_EJEC   = compromiso ejecutado del cuadro (dm.MNTO_SOLES)
  *   DEVENGADO      = devengado contable real (SIG_DEVENGADO)   ← fase posterior
- *   DIFERENCIA     = Modificado (vigente) - Ejecutado          ← comprometido no ejecutado
+ *   DIFERENCIA     = Programado (original) - Ejecutado         ← confirmado por el
+ *                    área usuaria; negativo = sobregiro respecto al CMN original
  *   SALDO_DEVENGAR = Ejecutado - Devengado                     ← ejecutado aún sin devengar
  *   (la columna Compromiso bruto = VALOR_DEPEND ya NO se expone: no interesa)
  */
@@ -146,8 +152,17 @@ class CmnQuery
             CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEVREAL, 0)
                  ELSE ROUND(ISNULL(dev.MNTO_DEVREAL, 0) * {$repTI}, 2)
             END                                                     AS DEVENGADO,
-            /* DIFERENCIA = Modificado (vigente) - Ejecutado  (comprometido no ejecutado). */
-            D.MNTO_TOTAL
+            /* DIFERENCIA = Programado (CMN original) - Ejecutado. Confirmado por el
+               área usuaria: la diferencia se mide contra lo ORIGINALMENTE programado,
+               no contra el vigente/modificado. Negativo = se ejecutó más de lo que
+               se programó (sobregiro respecto al cuadro original). Se repite aquí la
+               misma expresión de IMPORTE_PROG porque SQL Server no permite referenciar
+               el alias de una columna dentro del mismo SELECT. */
+            (CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                  ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                       * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                              ELSE 1.0 / D.GRUPOS_ITEM END, 2)
+             END)
             -
             (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_EJEC, 0)
                   ELSE ROUND(ISNULL(dev.MNTO_EJEC, 0) * {$repTI}, 2) END)  AS DIFERENCIA,
@@ -463,8 +478,14 @@ class CmnQuery
         if ($fase !== null && in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true)) $st->bindValue(':fase', $fase);
     }
 
+    /**
+     * $ejec: 'si' = solo ítems con ejecución (IMPORTE_EJEC > 0, "lo que sí se
+     * compró") · 'no' = solo ítems sin ejecución (IMPORTE_EJEC = 0, "lo que NO
+     * se compró") · '' = sin filtrar (ambos). Es literal fijo por whitelist
+     * (in_array), no necesita bind param.
+     */
     private function whereFiltros(string $tipo, string $search, $meta, $act, string $fase,
-                                  $clasif = '', $fuente = ''): string
+                                  $clasif = '', $fuente = '', string $ejec = ''): string
     {
         $w = " WHERE 1=1 ";
         if ($tipo === 'B' || $tipo === 'S') $w .= " AND T.TIPO_BIEN = :tipo ";
@@ -480,6 +501,8 @@ class CmnQuery
         $w .= $this->inClause('T.FF',                        'fuente', $this->toList($fuente))[0];
         if (in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true))
             $w .= " AND (" . $this->faseExpr('T') . ") = :fase ";
+        if ($ejec === 'si')      $w .= " AND T.IMPORTE_EJEC > 0.005 ";
+        elseif ($ejec === 'no')  $w .= " AND ISNULL(T.IMPORTE_EJEC,0) <= 0.005 ";
         return $w;
     }
 
@@ -521,11 +544,11 @@ class CmnQuery
     public function rows(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
                          string $tipo = '', string $search = '', $meta = '', $act = '',
                          string $fase = '', string $sort = 'mod_desc', int $page = 1, int $perPage = 50,
-                         $clasif = '', $fuente = ''): array
+                         $clasif = '', $fuente = '', string $ejec = ''): array
     {
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase, $clasif, $fuente);
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase, $clasif, $fuente, $ejec);
         // PHP 7.4: match() reemplazado por if/else.
         $order = 'T.IMPORTE_MOD DESC';
         if ($sort === 'mod_asc')       $order = 'T.IMPORTE_MOD ASC';
@@ -556,11 +579,11 @@ class CmnQuery
 
     public function summary(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
                             string $tipo = '', string $search = '', $meta = '', $act = '',
-                            $clasif = '', $fuente = ''): array
+                            $clasif = '', $fuente = '', string $ejec = ''): array
     {
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, '', $clasif, $fuente);
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, '', $clasif, $fuente, $ejec);
         $sql = "SELECT ({$fexpr}) AS fase, COUNT(*) c,
                        SUM(T.IMPORTE_PROG) prog,
                        SUM(T.IMPORTE_MOD)  monto,

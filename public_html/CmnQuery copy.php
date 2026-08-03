@@ -78,6 +78,7 @@ class CmnQuery
             D.SEC_FUNC                                              AS META,
             LEFT(REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ',''),2)  AS GENERICA,
             D.CLASIFICADOR                                          AS CLASIF_COD,
+            clg.NOMBRE_CLASIF                                       AS CLASIF_NOMBRE,
             D.TIPO_USO                                              AS TIPO_USO,
             'C' + RIGHT('0000' + CONVERT(VARCHAR,D.CODIGO_TAREA),4) AS ACTIV_OPERAT_COD,
             D.TIPO_TAREA                                            AS TIPO_TAREA,
@@ -225,6 +226,10 @@ class CmnQuery
                  AND cat.CLASE_BIEN=D.CLASE_BIEN AND cat.FAMILIA_BIEN=D.FAMILIA_BIEN AND cat.ITEM_BIEN=D.ITEM_BIEN
         LEFT JOIN UNIDAD_MEDIDA um ON um.UNIDAD_MEDIDA=D.UNIDAD_MEDIDA
         LEFT JOIN FUENTE_FINANC ff ON ff.ANO_EJE=D.ANNO_EJEC AND ff.FUENTE_FINANC=D.FUENTE_FINANC
+        LEFT JOIN SIG_CLASIFICADOR_GASTO clg
+                  ON clg.ANO_EJE=D.ANNO_EJEC
+                 AND REPLACE(REPLACE(clg.CLASIFICADOR,'.',''),' ','')
+                   = REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ','')
         LEFT JOIN SIG_CENTRO_COSTO_TAREA tar
                   ON tar.sec_ejec=D.SEC_EJEC AND tar.ano_eje=D.ANNO_EJEC AND tar.centro_costo=D.CENTRO_COSTO
                  AND tar.codigo_tarea=D.CODIGO_TAREA AND tar.tipo_tarea=D.TIPO_TAREA AND tar.nivel_tarea=D.NIVEL_TAREA
@@ -415,7 +420,27 @@ class CmnQuery
         if ($ccosto) $st->bindValue(':ccosto', $ccosto);
     }
 
-    private function bindFiltros($st, string $tipo, string $search, string $meta = '', string $act = '', ?string $fase = null): void
+    /* Convierte "a,b,c" en array limpio de valores no vacíos. */
+    private function toList($v): array
+    {
+        if (is_array($v)) $items = $v;
+        else $items = explode(',', (string)$v);
+        $out = [];
+        foreach ($items as $x) { $x = trim((string)$x); if ($x !== '') $out[] = $x; }
+        return array_values(array_unique($out));
+    }
+
+    /* Arma "col IN (:p0,:p1,...)" para una lista; devuelve [sql, [placeholder=>valor]]. */
+    private function inClause(string $expr, string $prefix, array $vals): array
+    {
+        if (!$vals) return ['', []];
+        $ph = []; $binds = [];
+        foreach ($vals as $i => $v) { $k = ':'.$prefix.$i; $ph[] = $k; $binds[$k] = $v; }
+        return [" AND {$expr} IN (".implode(',', $ph).") ", $binds];
+    }
+
+    private function bindFiltros($st, string $tipo, string $search, $meta = '', $act = '', ?string $fase = null,
+                                $clasif = '', $fuente = ''): void
     {
         if ($tipo === 'B' || $tipo === 'S') $st->bindValue(':tipo', $tipo);
         if ($search !== '') {
@@ -430,12 +455,16 @@ class CmnQuery
             // PDO_SQLSRV no reusa un parámetro nombrado: COD_PRODUCTO necesita el suyo.
             $st->bindValue(':q5', '%'.$plano.'%');
         }
-        if ($meta !== '') $st->bindValue(':meta', $meta);
-        if ($act  !== '') $st->bindValue(':act', $act);
+        // Filtros multi-select: bindear cada valor de cada lista.
+        foreach ($this->inClause('X', 'meta',   $this->toList($meta))[1]   as $k=>$v) $st->bindValue($k, $v);
+        foreach ($this->inClause('X', 'act',    $this->toList($act))[1]    as $k=>$v) $st->bindValue($k, $v);
+        foreach ($this->inClause('X', 'clasif', $this->toList($clasif))[1] as $k=>$v) $st->bindValue($k, $v);
+        foreach ($this->inClause('X', 'fuente', $this->toList($fuente))[1] as $k=>$v) $st->bindValue($k, $v);
         if ($fase !== null && in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true)) $st->bindValue(':fase', $fase);
     }
 
-    private function whereFiltros(string $tipo, string $search, string $meta, string $act, string $fase): string
+    private function whereFiltros(string $tipo, string $search, $meta, $act, string $fase,
+                                  $clasif = '', $fuente = ''): string
     {
         $w = " WHERE 1=1 ";
         if ($tipo === 'B' || $tipo === 'S') $w .= " AND T.TIPO_BIEN = :tipo ";
@@ -444,8 +473,11 @@ class CmnQuery
         // simple. El término :q1 ya viene normalizado desde bindFiltros.
         $normNombre = "REPLACE(REPLACE(REPLACE(T.NOMBRE_ITEM,'  ',' '+CHAR(7)),CHAR(7)+' ',''),CHAR(7),'')";
         if ($search !== '') $w .= " AND ({$normNombre} LIKE :q1 OR T.CLASIF_COD LIKE :q2 OR T.ESTADO_ORDEN LIKE :q3 OR T.CLASIF_PLANO LIKE :q4 OR T.COD_PRODUCTO LIKE :q5) ";
-        if ($meta !== '') $w .= " AND CONVERT(VARCHAR(50), T.META) = :meta ";
-        if ($act  !== '') $w .= " AND T.ACTIV_OPERAT_COD = :act ";
+        // Multi-select: cada filtro es una lista; se traduce a IN (...).
+        $w .= $this->inClause('CONVERT(VARCHAR(50), T.META)', 'meta',   $this->toList($meta))[0];
+        $w .= $this->inClause('T.ACTIV_OPERAT_COD',          'act',    $this->toList($act))[0];
+        $w .= $this->inClause('T.CLASIF_COD',                'clasif', $this->toList($clasif))[0];
+        $w .= $this->inClause('T.FF',                        'fuente', $this->toList($fuente))[0];
         if (in_array($fase, ['PROGRAMADO','MODIFICADO','EJECUTADO'], true))
             $w .= " AND (" . $this->faseExpr('T') . ") = :fase ";
         return $w;
@@ -456,36 +488,56 @@ class CmnQuery
         $inner = $this->innerSql(!!$ccosto);
         $run = function (string $col) use ($inner, $anioProg, $anioEjec, $secEjec, $ccosto) {
             $st = $this->db->prepare(
-                "SELECT DISTINCT CONVERT(VARCHAR(50), {$col}) v
+                "SELECT DISTINCT CONVERT(VARCHAR(80), {$col}) v
                  FROM ({$inner}) T
-                 WHERE {$col} IS NOT NULL AND CONVERT(VARCHAR(50), {$col}) <> ''
+                 WHERE {$col} IS NOT NULL AND CONVERT(VARCHAR(80), {$col}) <> ''
                  ORDER BY 1"
             );
             $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
             $st->execute();
             return array_column($st->fetchAll(), 'v');
         };
-        return ['metas' => $run('T.META'), 'actividades' => $run('T.ACTIV_OPERAT_COD')];
+        // Fuente y clasificador con etiqueta (código + nombre) para el dropdown.
+        $runPair = function (string $cod, string $nom) use ($inner, $anioProg, $anioEjec, $secEjec, $ccosto) {
+            $st = $this->db->prepare(
+                "SELECT DISTINCT CONVERT(VARCHAR(80), {$cod}) v, MAX(CONVERT(VARCHAR(200), {$nom})) etq
+                 FROM ({$inner}) T
+                 WHERE {$cod} IS NOT NULL AND CONVERT(VARCHAR(80), {$cod}) <> ''
+                 GROUP BY CONVERT(VARCHAR(80), {$cod})
+                 ORDER BY 1"
+            );
+            $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
+            $st->execute();
+            return $st->fetchAll();
+        };
+        return [
+            'metas'         => $run('T.META'),
+            'actividades'   => $run('T.ACTIV_OPERAT_COD'),
+            'clasificadores'=> $runPair('T.CLASIF_COD', 'T.CLASIF_NOMBRE'),
+            'fuentes'       => $runPair('T.FF', 'T.FF_NOMBRE'),
+        ];
     }
 
     public function rows(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
-                         string $tipo = '', string $search = '', string $meta = '', string $act = '',
-                         string $fase = '', string $sort = 'mod_desc', int $page = 1, int $perPage = 50): array
+                         string $tipo = '', string $search = '', $meta = '', $act = '',
+                         string $fase = '', string $sort = 'mod_desc', int $page = 1, int $perPage = 50,
+                         $clasif = '', $fuente = ''): array
     {
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase);
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, $fase, $clasif, $fuente);
         // PHP 7.4: match() reemplazado por if/else.
         $order = 'T.IMPORTE_MOD DESC';
         if ($sort === 'mod_asc')       $order = 'T.IMPORTE_MOD ASC';
         elseif ($sort === 'item_asc')  $order = 'T.NOMBRE_ITEM ASC';
         elseif ($sort === 'act_item')  $order = 'T.ACTIV_OPERAT_COD ASC, T.GRUPO_BIEN ASC, T.CLASE_BIEN ASC, T.FAMILIA_BIEN ASC, T.ITEM_BIEN ASC';
+        elseif ($sort === 'clasif')    $order = 'T.CLASIF_COD ASC, T.GRUPO_BIEN ASC, T.CLASE_BIEN ASC, T.FAMILIA_BIEN ASC, T.ITEM_BIEN ASC';
 
-        $tie = ($sort === 'act_item') ? '' : ', T.CCOSTO_COD, T.ITEM_BIEN';
+        $tie = ($sort === 'act_item' || $sort === 'clasif') ? '' : ', T.CCOSTO_COD, T.ITEM_BIEN';
 
         $cst = $this->db->prepare("SELECT COUNT(*) FROM ({$inner}) T {$w}");
         $this->bindBase($cst, $anioProg, $anioEjec, $secEjec, $ccosto);
-        $this->bindFiltros($cst, $tipo, $search, $meta, $act, $fase);
+        $this->bindFiltros($cst, $tipo, $search, $meta, $act, $fase, $clasif, $fuente);
         $cst->execute();
         $total = (int)$cst->fetchColumn();
 
@@ -496,18 +548,19 @@ class CmnQuery
                 OFFSET {$offset} ROWS FETCH NEXT " . (int)$perPage . " ROWS ONLY";
         $st = $this->db->prepare($sql);
         $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
-        $this->bindFiltros($st, $tipo, $search, $meta, $act, $fase);
+        $this->bindFiltros($st, $tipo, $search, $meta, $act, $fase, $clasif, $fuente);
         $st->execute();
 
         return ['rows' => $st->fetchAll(), 'total' => $total];
     }
 
     public function summary(int $anioProg, int $anioEjec, int $secEjec, ?string $ccosto,
-                            string $tipo = '', string $search = '', string $meta = '', string $act = ''): array
+                            string $tipo = '', string $search = '', $meta = '', $act = '',
+                            $clasif = '', $fuente = ''): array
     {
         $inner = $this->innerSql(!!$ccosto);
         $fexpr = $this->faseExpr('T');
-        $w = $this->whereFiltros($tipo, $search, $meta, $act, '');
+        $w = $this->whereFiltros($tipo, $search, $meta, $act, '', $clasif, $fuente);
         $sql = "SELECT ({$fexpr}) AS fase, COUNT(*) c,
                        SUM(T.IMPORTE_PROG) prog,
                        SUM(T.IMPORTE_MOD)  monto,
@@ -515,7 +568,7 @@ class CmnQuery
                 FROM ({$inner}) T {$w} GROUP BY ({$fexpr})";
         $st = $this->db->prepare($sql);
         $this->bindBase($st, $anioProg, $anioEjec, $secEjec, $ccosto);
-        $this->bindFiltros($st, $tipo, $search, $meta, $act);
+        $this->bindFiltros($st, $tipo, $search, $meta, $act, null, $clasif, $fuente);
         $st->execute();
         return $st->fetchAll();
     }

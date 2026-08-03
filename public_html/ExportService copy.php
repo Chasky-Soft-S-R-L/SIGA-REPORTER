@@ -12,13 +12,7 @@
  */
 class ExportService
 {
-    /**
-     * Encabezados visibles del reporte (orden = columnas de la vista web).
-     * FF/FF_NOMBRE/RB van pegados a META y a CLASIF_COD/CLASIF_NOMBRE. El
-     * desglose Programado → Modificado → Ejecutado va después, y justo tras
-     * IMPORTE_EJEC (antes de DEVENGADO) van DIFERENCIA, ESTADO y RESPONSABLE
-     * — así lo pidió el área usuaria.
-     */
+    /** Encabezados visibles del reporte (orden = columnas de la vista web). */
     public const HEADERS = [
         'ESTADO_CMN'          => 'ESTADO CMN',
         'ESTADO_FASE'         => 'FASE',
@@ -27,13 +21,13 @@ class ExportService
         'FF'                  => 'FF',
         'FF_NOMBRE'           => 'FUENTE FINANCIAMIENTO',
         'RB'                  => 'RB',
+        'TIPO_BIEN'           => 'TIPO_BIEN',
+        'CCOSTO_COD'          => 'CCOSTO_COD',
+        'CCOSTO_NOMBRE'       => 'CCOSTO_NOMBRE',
         'META'                => 'META',
         'GENERICA'            => 'GENÉRICA',
         'CLASIF_COD'          => 'CLASIF_COD',
         'CLASIF_NOMBRE'       => 'CLASIFICADOR',
-        'TIPO_BIEN'           => 'TIPO_BIEN',
-        'CCOSTO_COD'          => 'CCOSTO_COD',
-        'CCOSTO_NOMBRE'       => 'CCOSTO_NOMBRE',
         'TIPO_USO'            => 'TIPO_USO',
         'ACTIV_OPERAT_COD'    => 'ACTIV_OPERAT_COD',
         'ACTIV_OPERAT_NOMBRE' => 'ACTIVIDAD OPERATIVA',
@@ -50,15 +44,14 @@ class ExportService
         'CANTIDAD_MOD'        => 'CANTIDAD',
         'PRECIO_UNIT_MOD'     => 'PRECIO_UNIT',
         'IMPORTE_MOD'         => 'IMPORTE CMN MODIFICADO',
+        'ESTADO_ORDEN'        => 'ESTADO',
+        'RESPONSABLE'         => 'RESPONSABLE',
         'CANTIDAD_EJEC'       => 'CANTIDAD',
         'PRECIO_UNIT_EJEC'    => 'PRECIO_UNIT',
         'IMPORTE_EJEC'        => 'IMPORTE CMN EJECUTADO',
         'DIFERENCIA'          => 'DIFERENCIA',
-        'ESTADO_EJEC'         => 'ESTADO',
-        'RESPONSABLE'         => 'RESPONSABLE',
         'DEVENGADO'           => 'DEVENGADO',
         'SALDO_DEVENGAR'      => 'SALDO POR DEVENGAR',
-        'ESTADO_ORDEN'        => 'ESTADO ORDEN',
     ];
 
     /** Columnas enteras (sin decimales). */
@@ -76,22 +69,6 @@ class ExportService
     private const PALETA = [
         ['#059669','#ecfdf5'], ['#0284c7','#eff6ff'], ['#6d28d9','#f5f3ff'], ['#b45309','#fffbeb'],
         ['#dc2626','#fef2f2'], ['#0f766e','#f0fdfa'], ['#a21caf','#fdf4ff'], ['#4d7c0f','#f7fee7'],
-    ];
-
-    /** Color [fuerte, claro] por etapa: Programado=amarillo · Modificado=naranja
-     *  · Ejecutado=verde. Mismos valores que el frontend, para que el Excel
-     *  se vea idéntico a la pantalla. */
-    private const FASE_HEX = [
-        'PROGRAMADO' => ['#eab308', '#fefce8'],
-        'MODIFICADO' => ['#f97316', '#fff7ed'],
-        'EJECUTADO'  => ['#10b981', '#ecfdf5'],
-    ];
-
-    /** Qué columna pertenece a qué etapa (CANTIDAD/PRECIO_UNIT/IMPORTE de cada una). */
-    private const COLFASE = [
-        'CANTIDAD_PROG' => 'PROGRAMADO', 'PRECIO_UNIT_PROG' => 'PROGRAMADO', 'IMPORTE_PROG' => 'PROGRAMADO',
-        'CANTIDAD_MOD'  => 'MODIFICADO', 'PRECIO_UNIT_MOD'  => 'MODIFICADO', 'IMPORTE_MOD'  => 'MODIFICADO',
-        'CANTIDAD_EJEC' => 'EJECUTADO',  'PRECIO_UNIT_EJEC' => 'EJECUTADO',  'IMPORTE_EJEC' => 'EJECUTADO',
     ];
 
     /** Color estable por código de actividad (mismo criterio que el frontend). */
@@ -178,24 +155,20 @@ class ExportService
         return $out . '</tr>';
     }
 
-    /** Celdas de una fila de ítem. Las columnas de Programado/Modificado/Ejecutado
-     *  usan su tinte de fase (amarillo/naranja/verde claro) en vez del color de
-     *  actividad, igual que en pantalla. */
+    /** Celdas de una fila de ítem. */
     private static function celdasItem(array $r, string $bg): string
     {
         $out = '';
         foreach (self::HEADERS as $key => $_) {
-            $v      = $r[$key] ?? '';
-            $fase   = self::COLFASE[$key] ?? null;
-            $cellBg = $fase ? self::FASE_HEX[$fase][1] : $bg;
+            $v = $r[$key] ?? '';
             if (in_array($key, self::INT, true)) {
-                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'0\';text-align:right">'
+                $out .= '<td style="background:' . $bg . ';mso-number-format:\'0\';text-align:right">'
                       . (int)$v . '</td>';
             } elseif (in_array($key, self::NUM, true)) {
-                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'#,##0.00\';text-align:right">'
+                $out .= '<td style="background:' . $bg . ';mso-number-format:\'#,##0.00\';text-align:right">'
                       . number_format((float)$v, 2, '.', '') . '</td>';
             } else {
-                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
+                $out .= '<td style="background:' . $bg . ';mso-number-format:\'@\'">'
                       . htmlspecialchars((string)$v) . '</td>';
             }
         }
@@ -230,16 +203,11 @@ class ExportService
            . date('d/m/Y H:i') . '</td></tr>';
         echo '<tr><td colspan="' . $nCols . '"></td></tr>';
 
-        // ── Encabezados de columna: las de Programado/Modificado/Ejecutado van
-        //    en amarillo/naranja/verde con texto azul, igual que en pantalla. ──
+        // ── Encabezados de columna ──
         echo '<tr>';
         foreach (self::HEADERS as $key => $label) {
-            $al     = in_array($key, self::NUM, true) ? 'right' : 'left';
-            $fase   = self::COLFASE[$key] ?? null;
-            $bgH    = $fase ? self::FASE_HEX[$fase][0] : '#1abb9c';
-            $colH   = $fase ? '#1e3a8a' : '#fff';
-            $border = $fase ? $bgH : '#0f766e';
-            echo '<th style="background:' . $bgH . ';color:' . $colH . ';font-weight:bold;border:1px solid ' . $border . ';text-align:' . $al . '">'
+            $al = in_array($key, self::NUM, true) ? 'right' : 'left';
+            echo '<th style="background:#1abb9c;color:#fff;font-weight:bold;border:1px solid #0f766e;text-align:' . $al . '">'
                . htmlspecialchars($label) . '</th>';
         }
         echo '</tr>';
@@ -284,49 +252,6 @@ class ExportService
     }
 
     /**
-     * "Falta ejecutar" con el MISMO nivel de detalle que la tabla oficial
-     * (FF/Rb + Meta + Clasificador + Área), no solo agregado por clasificador.
-     * Motivo: dentro de un mismo clasificador, un ítem puede haberse ejecutado
-     * al 100% y otro haber quedado con saldo (p.ej. se compró más barato de lo
-     * programado) — ese saldo también es real y usable, y se pierde si solo se
-     * ve el total del clasificador.
-     *
-     * El "saldo" es exactamente la misma DIFERENCIA de la tabla principal
-     * (Programado - Ejecutado, confirmada por el área usuaria) sumada por
-     * grupo — una sola columna, nada de Modificado ni Ejecutado por separado.
-     * Se calcula sobre TODAS las filas del cuadro (no solo las que ya tienen
-     * ejecución), porque un ítem sin ejecución también aporta saldo pendiente.
-     * Reutilizado por pdf(); sin consulta aparte al SIGA.
-     */
-    private static function saldoPorGrupo(array $rows): array
-    {
-        $g = [];
-        foreach ($rows as $r) {
-            $k = ($r['FF'] ?? '').'|'.($r['RB'] ?? '').'|'.($r['META'] ?? '').'|'.($r['CLASIF_COD'] ?? '').'|'.($r['CCOSTO_COD'] ?? '');
-            if (!isset($g[$k])) {
-                // Mismo formato que la tabla oficial: FF/Rb combina fuente + rubro.
-                $ffrb = trim((string)($r['FF'] ?? ''));
-                if (($r['RB'] ?? '') !== '') $ffrb .= '-' . $r['RB'];
-                $g[$k] = [
-                    'ff'    => $ffrb,
-                    'meta'  => str_pad((string)($r['META'] ?? ''), 4, '0', STR_PAD_LEFT),
-                    'clas'  => ($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? ''),
-                    'area'  => ($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? ''),
-                    'saldo' => 0.0,
-                ];
-            }
-            $g[$k]['saldo'] += (float)($r['DIFERENCIA'] ?? 0);
-        }
-        // Solo grupos con saldo real por ejecutar (positivo).
-        $g = array_values(array_filter($g, fn($x) => $x['saldo'] > 0.005));
-        usort($g, function ($a, $b) {
-            return [$a['ff'], $a['meta'], $a['clas'], $a['area']]
-               <=> [$b['ff'], $b['meta'], $b['clas'], $b['area']];
-        });
-        return $g;
-    }
-
-    /**
      * PDF: vista optimizada para impresión que dispara el diálogo de imprimir
      * (Guardar como PDF). Sin dependencias.
      * @param array $meta ['centro'=>, 'agrupar'=>bool]
@@ -349,12 +274,6 @@ class ExportService
         });
         $total = array_sum(array_map(fn($r) => (float)($r['IMPORTE_EJEC'] ?? 0), $ejec));
 
-        // "Falta ejecutar" con el mismo detalle que la tabla oficial (FF/Rb+Meta+
-        // Clasificador+Área): usa TODAS las filas ($rows), no solo $ejec, porque
-        // un ítem sin ejecución también puede tener saldo pendiente.
-        $saldos     = self::saldoPorGrupo($rows);
-        $totalSaldo = array_sum(array_column($saldos, 'saldo'));
-
         echo '<!doctype html><html lang="es"><head><meta charset="utf-8">';
         echo '<title>Ejecución por Área Usuaria ' . htmlspecialchars((string)$anio) . '</title>';
         echo '<style>
@@ -369,10 +288,6 @@ class ExportService
             th{background:#f1f5f9;font-size:8.5px;text-align:center}
             td.num,th.num{text-align:right}
             tfoot td{font-weight:bold;background:#f8fafc}
-            .pendTitulo{background:#1f2937;color:#fff;font-weight:bold;font-size:9.5px;padding:5px 7px;margin-top:16px;
-                        display:flex;align-items:center;gap:6px;page-break-inside:avoid}
-            .pendTabla{page-break-inside:auto}
-            .pendTabla tr{page-break-inside:avoid;page-break-after:auto}
             @media print{@page{size:A4 landscape;margin:8mm}}
         </style></head><body onload="window.print()">';
 
@@ -429,33 +344,6 @@ class ExportService
            . '<td class="num">' . number_format($total, 2) . '</td>'
            . '</tr></tfoot></table>';
         echo '<p style="font-size:7.5px;color:#64748b;margin-top:6px">Reporte generado desde SIGA-REPORTER · muestra únicamente los ítems con fase de compromiso ejecutada.</p>';
-
-        // ── FALTA EJECUTAR · MISMO DETALLE QUE LA TABLA OFICIAL (debajo de ella) ──
-        if ($saldos) {
-            echo '<div class="pendTitulo"> FALTA EJECUTAR · SALDO POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
-            echo '<table class="pendTabla"><thead><tr>'
-               . '<th style="width:6%">FF/Rb</th>'
-               . '<th style="width:22%">Meta</th>'
-               . '<th style="width:38%">Clasificador de Gasto</th>'
-               . '<th style="width:22%">Área Usuaria</th>'
-               . '<th class="num" style="width:12%">Saldo (S/)</th>'
-               . '</tr></thead><tbody>';
-            foreach ($saldos as $s) {
-                echo '<tr>'
-                   . '<td>' . htmlspecialchars($s['ff']) . '</td>'
-                   . '<td>' . htmlspecialchars($s['meta']) . '</td>'
-                   . '<td>' . htmlspecialchars($s['clas']) . '</td>'
-                   . '<td>' . htmlspecialchars($s['area']) . '</td>'
-                   . '<td class="num">' . number_format($s['saldo'], 2) . '</td>'
-                   . '</tr>';
-            }
-            echo '</tbody><tfoot><tr>'
-               . '<td colspan="4" style="text-align:right">TOTAL &nbsp; S/.</td>'
-               . '<td class="num">' . number_format($totalSaldo, 2) . '</td>'
-               . '</tr></tfoot></table>';
-            echo '<p style="font-size:7.5px;color:#64748b;margin-top:4px">Saldo = DIFERENCIA (Importe CMN Programado − Importe CMN Ejecutado), agrupado igual que el reporte oficial (FF/Rb + Meta + Clasificador + Área). Solo se muestran grupos con saldo positivo.</p>';
-        }
-
         echo '</body></html>';
     }
 }

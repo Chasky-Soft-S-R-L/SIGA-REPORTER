@@ -36,6 +36,8 @@ $fTipo   = in_array($_GET['tipo'] ?? '', ['B','S'], true) ? $_GET['tipo'] : '';
 $fQ      = trim((string)($_GET['q'] ?? ''));
 $fMeta   = (string)($_GET['meta'] ?? '');
 $fAct    = (string)($_GET['act'] ?? '');
+$fClasif = (string)($_GET['clasif'] ?? '');
+$fFuente = (string)($_GET['fuente'] ?? '');
 $fFase   = (string)($_GET['fase'] ?? '');
 $fSort   = (string)($_GET['sort'] ?? 'act_item');
 $page    = max(1, (int)($_GET['page'] ?? 1));
@@ -61,17 +63,31 @@ try {
 
 /* ---- EXPORTACIÓN (respeta filtros; sin paginar) ---- */
 if ($export === 'excel' || $export === 'pdf') {
-    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS)['rows'];
+    // Evita que el navegador sirva un export cacheado tras cambiar el backend.
+    header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+    header('Pragma: no-cache');
+    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente)['rows'];
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
     // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
     $ccNom = 'TODOS LOS CENTROS';
     if ($ccosto) { foreach ($q->centros($anioProg,$anioEjec,SEC_EJEC) as $c) { if ($c['cod']===$ccosto) { $ccNom = $c['cod'].'  ·  '.$c['nombre']; break; } } }
+    // Campo de agrupación elegido en pantalla (groupBy). Vacío = sin agrupar.
+    $gBy = (string)($_GET['groupby'] ?? '');
+    $agrupaOn = ($_GET['agrupar'] ?? '1') !== '0' && $gBy !== '';
     $meta = ['titulo'=>'CUADRO DE NECESIDADES '.$anioProg.'  (ejecución '.$anioEjec.')',
-             'centro'=>$ccNom, 'anio'=>$anioProg, 'agrupar'=>($fSort==='act_item'),
+             'centro'=>$ccNom, 'anio'=>$anioProg,
+             'agrupar'=>$agrupaOn, 'groupBy'=>($gBy ?: 'ACTIV_OPERAT_COD'),
              'entidad'=>APP_ENTIDAD];
 
-    /* Campos visibles elegidos en pantalla (selector de campos). Si ExportService
-       aún no los soporta, esta sección es inocua: solo recorta las claves del array. */
+    if ($export==='pdf') {
+        // El PDF "Ejecución por Área Usuaria" usa su propio conjunto fijo de
+        // columnas (FF/Meta/Clasif/Área/Compromiso), con TODOS los datos sin
+        // recortar por el selector de campos.
+        ExportService::pdf($all,'CUADRO DE NECESIDADES '.$anioProg,$meta);
+        exit;
+    }
+
+    /* Excel: respeta los campos visibles elegidos en pantalla (selector de campos). */
     $colsSel = array_values(array_filter(array_map('trim', explode(',', (string)($_GET['cols'] ?? '')))));
     if ($colsSel) {
         $colsSel = array_values(array_intersect($colsSel, array_keys(ExportService::HEADERS)));
@@ -82,8 +98,7 @@ if ($export === 'excel' || $export === 'pdf') {
         }
     }
 
-    if ($export==='excel') ExportService::excel($all,$nombre,$meta);
-    else ExportService::pdf($all,'CUADRO DE NECESIDADES '.$anioProg.'  (ejecución '.$anioEjec.')',$meta);
+    ExportService::excel($all,$nombre,$meta);
     exit;
 }
 
@@ -138,8 +153,8 @@ if ($action === 'data') {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     try {
-        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage);
-        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct);
+        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente);
+        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente);
         echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[index/data] ' . $e->getMessage());
@@ -207,35 +222,84 @@ include __DIR__ . '/partials/head.php';
     <!-- Barra de herramientas (cliente → servidor) -->
     <div class="bg-white rounded-xl border border-gray-200 p-3 mb-3 space-y-3">
       <div id="chips" class="flex flex-wrap gap-2"></div>
-      <div class="flex flex-col sm:flex-row gap-2">
-        <div class="relative flex-1 min-w-[180px]">
-          <input id="q" type="text" value="<?= htmlspecialchars($fQ) ?>" placeholder="Buscar ítem, clasificador u orden…" class="input-bordered pl-9">
-          <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path d="M21 21l-4-4" stroke-width="2" stroke-linecap="round"/></svg>
-        </div>
-        <select id="fTipo" class="input-bordered sm:w-40"><option value="">Bien y Servicio</option>
+      <!-- Fila de controles: filtros + orden + agrupación + herramientas (una sola fila) -->
+      <div class="flex flex-wrap items-center gap-2">
+        <select id="fTipo" class="input-bordered w-36"><option value="">Bien y Servicio</option>
           <option value="B" <?= $fTipo==='B'?'selected':'' ?>>Solo Bienes</option>
           <option value="S" <?= $fTipo==='S'?'selected':'' ?>>Solo Servicios</option></select>
-        <select id="fMeta" class="input-bordered sm:w-36"><option value="">Todas las metas</option>
-          <?php foreach ($opts['metas'] as $m): ?><option value="<?= htmlspecialchars($m) ?>" <?= $fMeta===$m?'selected':'' ?>>Meta <?= htmlspecialchars($m) ?></option><?php endforeach; ?></select>
-        <select id="fAct" class="input-bordered sm:w-40"><option value="">Toda actividad</option>
-          <?php foreach ($opts['actividades'] as $a): ?><option value="<?= htmlspecialchars($a) ?>" <?= $fAct===$a?'selected':'' ?>><?= htmlspecialchars($a) ?></option><?php endforeach; ?></select>
-        <select id="sort" class="input-bordered sm:w-40">
-          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option><option value="act_item">Actividad + código ítem</option></select>
-        <div class="inline-flex items-center gap-1">
-          <label class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 cursor-pointer select-none whitespace-nowrap">
-            <input type="checkbox" id="agrupar" class="accent-primary" checked> Agrupar
-          </label>
-          <select id="groupBy" class="input-bordered sm:w-44 py-2" title="Agrupar por…">
-            <option value="ACTIV_OPERAT_COD">por Actividad</option>
-            <option value="CLASIF_COD">por Clasificador</option>
-            <option value="META">por Meta</option>
-            <option value="GENERICA">por Genérica</option>
-            <option value="FF">por Fuente Financ.</option>
-            <option value="ESTADO_FASE">por Fase</option>
-          </select>
-          <button id="gExpand" type="button" title="Expandir todo" class="px-2 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">⊞</button>
-          <button id="gCollapse" type="button" title="Contraer todo" class="px-2 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50">⊟</button>
-
+        <!-- Filtros multi-select tipo Excel (checkboxes). El botón muestra el conteo. -->
+        <div class="msf relative" data-msf="meta">
+          <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
+            <span class="msf-lbl truncate">Todas las metas</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+          </button>
+          <div class="msf-pop hidden absolute z-40 mt-1 w-56 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
+            <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
+              <input type="text" class="msf-search input-bordered py-1 text-xs" placeholder="Buscar meta…">
+              <div class="flex gap-2 mt-1 text-[11px]"><button type="button" class="msf-all text-primary font-semibold">Todas</button><button type="button" class="msf-none text-gray-500">Ninguna</button></div>
+            </div>
+            <?php foreach ($opts['metas'] as $m): ?>
+              <label class="msf-opt flex items-center gap-2 px-2 py-1 text-xs rounded hover:bg-gray-50 cursor-pointer"><input type="checkbox" value="<?= htmlspecialchars($m) ?>" class="accent-primary"><span>Meta <?= htmlspecialchars($m) ?></span></label>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div class="msf relative" data-msf="act">
+          <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
+            <span class="msf-lbl truncate">Toda actividad</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+          </button>
+          <div class="msf-pop hidden absolute z-40 mt-1 w-64 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
+            <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
+              <input type="text" class="msf-search input-bordered py-1 text-xs" placeholder="Buscar actividad…">
+              <div class="flex gap-2 mt-1 text-[11px]"><button type="button" class="msf-all text-primary font-semibold">Todas</button><button type="button" class="msf-none text-gray-500">Ninguna</button></div>
+            </div>
+            <?php foreach ($opts['actividades'] as $a): ?>
+              <label class="msf-opt flex items-center gap-2 px-2 py-1 text-xs rounded hover:bg-gray-50 cursor-pointer"><input type="checkbox" value="<?= htmlspecialchars($a) ?>" class="accent-primary"><span><?= htmlspecialchars($a) ?></span></label>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div class="msf relative" data-msf="clasif">
+          <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
+            <span class="msf-lbl truncate">Todo clasificador</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+          </button>
+          <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
+            <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
+              <input type="text" class="msf-search input-bordered py-1 text-xs" placeholder="Buscar clasificador…">
+              <div class="flex gap-2 mt-1 text-[11px]"><button type="button" class="msf-all text-primary font-semibold">Todos</button><button type="button" class="msf-none text-gray-500">Ninguno</button></div>
+            </div>
+            <?php foreach ($opts['clasificadores'] as $cl): ?>
+              <label class="msf-opt flex items-center gap-2 px-2 py-1 text-xs rounded hover:bg-gray-50 cursor-pointer"><input type="checkbox" value="<?= htmlspecialchars($cl['v']) ?>" class="accent-primary"><span><?= htmlspecialchars($cl['v'].(isset($cl['etq'])&&$cl['etq']!==$cl['v']?' · '.$cl['etq']:'')) ?></span></label>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <div class="msf relative" data-msf="fuente">
+          <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
+            <span class="msf-lbl truncate">Toda fuente</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+          </button>
+          <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
+            <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
+              <input type="text" class="msf-search input-bordered py-1 text-xs" placeholder="Buscar fuente…">
+              <div class="flex gap-2 mt-1 text-[11px]"><button type="button" class="msf-all text-primary font-semibold">Todas</button><button type="button" class="msf-none text-gray-500">Ninguna</button></div>
+            </div>
+            <?php foreach ($opts['fuentes'] as $fu): ?>
+              <label class="msf-opt flex items-center gap-2 px-2 py-1 text-xs rounded hover:bg-gray-50 cursor-pointer"><input type="checkbox" value="<?= htmlspecialchars($fu['v']) ?>" class="accent-primary"><span><?= htmlspecialchars($fu['v'].' · '.$fu['etq']) ?></span></label>
+            <?php endforeach; ?>
+          </div>
+        </div>
+        <select id="sort" class="input-bordered w-44">
+          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option><option value="act_item">Actividad + código ítem</option><option value="clasif">Clasificador + ítem</option></select>
+        <label class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 cursor-pointer select-none whitespace-nowrap">
+          <input type="checkbox" id="agrupar" class="accent-primary" checked> Agrupar
+        </label>
+        <select id="groupBy" class="input-bordered w-44 py-2" title="Agrupar por…">
+          <option value="ACTIV_OPERAT_COD">por Actividad</option>
+          <option value="CLASIF_COD">por Clasificador</option>
+          <option value="META">por Meta</option>
+          <option value="GENERICA">por Genérica</option>
+          <option value="FF">por Fuente Financ.</option>
+          <option value="ESTADO_FASE">por Fase</option>
+        </select>
+        <button id="gExpand" type="button" title="Expandir todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-plus"></i></button>
+        <button id="gCollapse" type="button" title="Contraer todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-minus"></i></button>
+        <div class="ml-auto flex items-center gap-2">
           <!-- ── Selector de campos ── -->
           <div class="relative" id="colBox">
             <button id="btnCols" type="button" title="Elegir qué columnas mostrar"
@@ -252,6 +316,11 @@ include __DIR__ . '/partials/head.php';
             <i class="fa-solid fa-expand"></i>
           </button>
         </div>
+      </div>
+      <!-- Fila 3: buscador al 100% de ancho -->
+      <div class="relative w-full">
+        <input id="q" type="text" value="<?= htmlspecialchars($fQ) ?>" placeholder="Buscar ítem, clasificador u orden…" class="input-bordered pl-9 w-full">
+        <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path d="M21 21l-4-4" stroke-width="2" stroke-linecap="round"/></svg>
       </div>
     </div>
 
@@ -381,6 +450,10 @@ include __DIR__ . '/partials/head.php';
 </style>
 
 <style>
+  /* ── Filtros multi-select tipo Excel ── */
+  .msf-btn{cursor:pointer}
+  .msf-btn.msf-on{border-color:var(--primary,#059669)!important;color:var(--primary,#059669);font-weight:600}
+  .msf-pop{min-width:100%}
   /* ── Loader elegante ───────────────────────────── */
   #loadBar{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;background:transparent;overflow:hidden;opacity:0;transition:opacity .2s}
   #loadBar.on{opacity:1}
@@ -469,9 +542,10 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   const faseKey=d=>FMAP[d.ESTADO_FASE]?d.ESTADO_FASE:'PROGRAMADO';
 
   const $=id=>document.getElementById(id);
-  const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),fMetaEl=$('fMeta'),fActEl=$('fAct'),sortEl=$('sort'),perPageEl=$('perPage');
+  const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),sortEl=$('sort'),perPageEl=$('perPage');
   const vTable=$('viewTable'),vKanban=$('viewKanban'),theadEl=$('thead'),tbodyEl=$('tbody'),tfootEl=$('tfoot');
-  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:'<?= htmlspecialchars($fMeta) ?>',act:'<?= htmlspecialchars($fAct) ?>',fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
+  /* Filtros multi-select: meta/act/clasif/fuente son ARRAYS de valores marcados. */
+  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:[],act:[],clasif:[],fuente:[],fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
   /* consultado = ya se trajo data del servidor al menos una vez. Distingue
      "todavía no consulté" (placeholder) de "consulté y no hubo resultados". */
   let mode='table', agrupar=true, prevSort='mod_desc', consultado=false, last={rows:[],total:0,summary:[]};
@@ -527,9 +601,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
-    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
     completo  :()=>ALLC.slice()
   };
@@ -614,9 +688,10 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   colBadge();
   /* ═══════════════ fin selector de campos ═══════════════ */
 
-  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta,act:st.act,fase:st.fase,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
+  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta.join(','),act:st.act.join(','),clasif:st.clasif.join(','),fuente:st.fuente.join(','),fase:st.fase,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
   function updateExport(){
-    const cx={cols:COLS().filter(k=>!k.startsWith('__')).join(',')};
+    const cx={cols:COLS().filter(k=>!k.startsWith('__')).join(','),
+              groupby:(agrupar?groupBy:''), agrupar:(agrupar?'1':'0'), _:Date.now()};
     $('expExcel').href='?'+params(Object.assign({export:'excel'},cx)).toString();
     $('expPdf').href  ='?'+params(Object.assign({export:'pdf'  },cx)).toString();
   }
@@ -818,21 +893,28 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
               sE=items.reduce((s,x)=>s+ +x.IMPORTE_EJEC,0),sD=items.reduce((s,x)=>s+ +x.DIFERENCIA,0),
               sDev=items.reduce((s,x)=>s+ +x.DEVENGADO,0),sSaldo=items.reduce((s,x)=>s+ +x.SALDO_DEVENGAR,0);
         const pct=sM>0?Math.min(100,sE/sM*100):0;
-        /* nombre del grupo: para actividad usa el nombre; para otros, el propio valor */
+        /* nombre del grupo: usa el nombre descriptivo según el campo agrupado */
         const gname = groupBy==='ACTIV_OPERAT_COD' ? (items[0].ACTIV_OPERAT_NOMBRE||'Sin actividad')
+                    : groupBy==='CLASIF_COD'        ? (items[0].CLASIF_NOMBRE||'Sin descripción')
+                    : groupBy==='FF'                ? (items[0].FF_NOMBRE||k)
+                    : groupBy==='META'              ? ('Meta '+k)
+                    : groupBy==='GENERICA'          ? ('Genérica '+k)
                     : groupBy==='ESTADO_FASE'       ? (FMAP[k]?FMAP[k].label:k)
                     : grpLabel(k);
 
         if(gi)html+='<tr><td colspan="'+nCols+'" class="p-0"><div style="height:10px;background:#f8fafc"></div></td></tr>';
 
         html+='<tr class="ghead cursor-pointer select-none" data-act="'+ec(k)+'"><td colspan="'+nCols+'" class="p-0">'
-          +'<div class="flex items-center gap-2.5 px-2.5 py-2 text-white" style="background:'+c[0]+'">'
-            +'<span class="text-[11px] w-3 shrink-0 opacity-90">'+(cerrado?'▶':'▼')+'</span>'
+          +'<div class="flex items-center gap-2.5 px-2.5 py-2 text-white sticky left-0" style="background:'+c[0]+';width:calc(100vw - 2rem);max-width:100%">'
+            +'<i class="fa-solid '+(cerrado?'fa-chevron-right':'fa-chevron-down')+' text-[10px] w-3 shrink-0 opacity-90"></i>'
             +'<span class="px-2 py-0.5 rounded-sm text-[10px] font-black tracking-widest shrink-0" style="background:rgba(255,255,255,.22)">'+ec(k)+'</span>'
             +'<span class="text-[12px] font-bold truncate uppercase tracking-wide">'+ec(gname)+'</span>'
             +'<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style="background:rgba(255,255,255,.9);color:'+c[0]+'">'+items.length+' ítems</span>'
-            +'<div class="ml-auto flex items-center gap-2 shrink-0">'
-              +'<div class="w-24 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,255,255,.3)"><div class="h-full rounded-full bg-white" style="width:'+pct+'%"></div></div>'
+            +'<div class="ml-auto flex items-center gap-3 shrink-0">'
+              +'<span class="text-[10px] tabular-nums hidden sm:inline"><span class="opacity-70">Mod</span> <b>'+money(sM)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums"><span class="opacity-70">Ejec</span> <b>'+money(sE)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums hidden md:inline"><span class="opacity-70">Dev</span> <b>'+money(sDev)+'</b></span>'
+              +'<div class="w-20 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,255,255,.3)"><div class="h-full rounded-full bg-white" style="width:'+pct+'%"></div></div>'
               +'<span class="text-[11px] font-black tabular-nums w-12 text-right">'+pct.toFixed(1)+'%</span>'
             +'</div>'
           +'</div></td></tr>';
@@ -1406,14 +1488,43 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* controles */
   let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},350);});
   fTipoEl.addEventListener('change',()=>{st.tipo=fTipoEl.value;st.page=1;load();});
-  fMetaEl.addEventListener('change',()=>{st.meta=fMetaEl.value;st.page=1;load();});
-  fActEl.addEventListener('change',()=>{st.act=fActEl.value;st.page=1;load();});
+  /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════ */
+  const MSF_LBL={meta:{all:'Todas las metas',pre:'meta'},act:{all:'Toda actividad',pre:'act'},clasif:{all:'Todo clasificador',pre:'clasif'},fuente:{all:'Toda fuente',pre:'fuente'}};
+  function msfSync(box){
+    const key=box.dataset.msf;
+    const checks=[...box.querySelectorAll('.msf-opt input:checked')];
+    st[key]=checks.map(c=>c.value);
+    const lbl=box.querySelector('.msf-lbl');
+    const cfg=MSF_LBL[key];
+    if(!checks.length) lbl.textContent=cfg.all;
+    else if(checks.length===1) lbl.textContent=(key==='meta'?'Meta ':'')+checks[0].value;
+    else lbl.textContent=checks.length+' '+cfg.pre+'s';
+    box.querySelector('.msf-btn').classList.toggle('msf-on',checks.length>0);
+  }
+  document.querySelectorAll('.msf').forEach(box=>{
+    const btn=box.querySelector('.msf-btn'), pop=box.querySelector('.msf-pop');
+    const search=box.querySelector('.msf-search');
+    btn.addEventListener('click',e=>{e.stopPropagation();
+      document.querySelectorAll('.msf-pop').forEach(p=>{if(p!==pop)p.classList.add('hidden');});
+      pop.classList.toggle('hidden');if(!pop.classList.contains('hidden')&&search)search.focus();});
+    // buscar dentro del dropdown
+    if(search)search.addEventListener('input',()=>{const t=search.value.toLowerCase();
+      box.querySelectorAll('.msf-opt').forEach(o=>{o.style.display=o.textContent.toLowerCase().includes(t)?'':'none';});});
+    // marcar/desmarcar → actualiza estado y recarga
+    box.querySelectorAll('.msf-opt input').forEach(chk=>chk.addEventListener('change',()=>{msfSync(box);st.page=1;load();}));
+    // todas / ninguna
+    const all=box.querySelector('.msf-all'), none=box.querySelector('.msf-none');
+    if(all)all.addEventListener('click',()=>{box.querySelectorAll('.msf-opt:not([style*="none"]) input').forEach(c=>c.checked=true);msfSync(box);st.page=1;load();});
+    if(none)none.addEventListener('click',()=>{box.querySelectorAll('.msf-opt input').forEach(c=>c.checked=false);msfSync(box);st.page=1;load();});
+  });
+  // cerrar dropdowns al hacer clic fuera
+  document.addEventListener('click',e=>{if(!e.target.closest('.msf'))document.querySelectorAll('.msf-pop').forEach(p=>p.classList.add('hidden'));});
   sortEl.addEventListener('change',()=>{st.sort=sortEl.value;if(st.sort==='act_item'){agrupar=true;$('agrupar').checked=true;}st.page=1;load();});
   $('gExpand').addEventListener('click',()=>{colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}paint();});
   $('gCollapse').addEventListener('click',()=>{if(!agrupar){agrupar=true;$('agrupar').checked=true;}
     last.rows.forEach(d=>colapsados.add((d[groupBy]==null||d[groupBy]==='')?'—':d[groupBy]));paint();});
-  $('groupBy').addEventListener('change',e=>{groupBy=e.target.value;colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}paint();});
-  $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;st.page=1;load();});
+  $('groupBy').addEventListener('change',e=>{groupBy=e.target.value;colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}updateExport();paint();});
+  $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;updateExport();st.page=1;load();});
   perPageEl.addEventListener('change',()=>{st.perPage=+perPageEl.value;st.page=1;load();});
   /* Cargar todos los centros (botón del formulario y del estado inicial). */
   const btnAll=$('btnAll'); if(btnAll) btnAll.addEventListener('click',()=>load());
@@ -1455,7 +1566,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   agrupar=(st.sort==='act_item');$('agrupar').checked=agrupar;
   $('groupBy').value=groupBy;
   setMode('table');
-  /* Con centro elegido se consulta directo; sin centro, estado inicial. */
   if(CC!=='') load(); else placeholder();
 })();
 </script>

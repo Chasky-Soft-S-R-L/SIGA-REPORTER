@@ -39,9 +39,12 @@ $fAct    = (string)($_GET['act'] ?? '');
 $fClasif = (string)($_GET['clasif'] ?? '');
 $fFuente = (string)($_GET['fuente'] ?? '');
 $fFase   = (string)($_GET['fase'] ?? '');
+/* Ejecutado/No ejecutado: 'si' = solo lo que YA se compró (IMPORTE_EJEC > 0),
+   'no' = solo lo que NO se ha comprado (IMPORTE_EJEC = 0), '' = ambos. */
+$fEjec   = in_array($_GET['ejec'] ?? '', ['si','no'], true) ? $_GET['ejec'] : '';
 $fSort   = (string)($_GET['sort'] ?? 'act_item');
 $page    = max(1, (int)($_GET['page'] ?? 1));
-$perPage = min(200, max(10, (int)($_GET['perPage'] ?? 50)));
+$perPage = min(300, max(10, (int)($_GET['perPage'] ?? 300)));
 
 if ($resource !== 'cmn') { http_response_code(404); exit('Recurso no encontrado'); }
 
@@ -66,7 +69,13 @@ if ($export === 'excel' || $export === 'pdf') {
     // Evita que el navegador sirva un export cacheado tras cambiar el backend.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
-    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente)['rows'];
+    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente,$fEjec)['rows'];
+    // Estado de ejecución por ítem (Pendiente / Ejecutado), igual que en
+    // pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista web.
+    foreach ($all as &$r) {
+        $r['ESTADO_EJEC'] = ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) ? 'Ejecutado' : 'Pendiente';
+    }
+    unset($r);
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
     // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
     $ccNom = 'TODOS LOS CENTROS';
@@ -153,8 +162,8 @@ if ($action === 'data') {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     try {
-        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente);
-        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente);
+        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente,$fEjec);
+        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente,$fEjec);
         echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[index/data] ' . $e->getMessage());
@@ -324,21 +333,21 @@ include __DIR__ . '/partials/head.php';
       </div>
     </div>
 
-    <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto max-h-[calc(100vh-320px)]" style="-webkit-overflow-scrolling:touch">
+    <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto flex-1 min-h-[280px]" style="-webkit-overflow-scrolling:touch">
       <table class="min-w-full text-xs whitespace-nowrap">
         <thead class="sticky top-0 z-10"><tr id="thead" class="bg-primary text-white"></tr></thead>
         <tbody id="tbody"></tbody>
         <tfoot id="tfoot" class="sticky bottom-0"></tfoot>
       </table>
     </div>
-    <div id="viewKanban" class="hidden flex-1 flex gap-3 overflow-x-auto pb-2" style="-webkit-overflow-scrolling:touch"></div>
+    <div id="viewKanban" class="hidden kanbanGrid flex-1 min-h-[280px] overflow-y-auto pb-2"></div>
 
     <!-- Paginación -->
     <div class="flex items-center justify-between gap-3 mt-3 text-sm">
       <span id="pageInfo" class="text-gray-500"></span>
       <div class="flex items-center gap-2">
         <select id="perPage" class="input-bordered w-auto py-1.5">
-          <option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option>
+          <option value="25">25</option><option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="300" selected>300</option>
         </select>
         <button id="prev" class="px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100 disabled:opacity-40">‹</button>
         <span id="pageNum" class="px-2 text-gray-600"></span>
@@ -454,7 +463,12 @@ include __DIR__ . '/partials/head.php';
   .msf-btn{cursor:pointer}
   .msf-btn.msf-on{border-color:var(--primary,#059669)!important;color:var(--primary,#059669);font-weight:600}
   .msf-pop{min-width:100%}
-  /* ── Loader elegante ───────────────────────────── */
+  /* ── Kanban responsivo: grid que llena el ancho disponible en vez de columnas
+     fijas con scroll horizontal (evita la franja en blanco a la derecha en
+     pantallas anchas). !important en .hidden para que gane siempre al toggle
+     tabla/kanban, sin importar el orden de las reglas de Tailwind. */
+  #viewKanban.kanbanGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem;align-content:start}
+  #viewKanban.hidden{display:none!important}
   #loadBar{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;background:transparent;overflow:hidden;opacity:0;transition:opacity .2s}
   #loadBar.on{opacity:1}
   #loadBar span{position:absolute;inset:0;width:40%;border-radius:99px;
@@ -530,12 +544,22 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 (function(){
   const HEADERS=<?= $jsonH ?>, NUM=new Set(<?= $jsonNum ?>), HKEYS=Object.keys(HEADERS);
   const ANIO='<?= $anioProg ?>', CC='<?= htmlspecialchars($ccosto ?? '') ?>';
-  /* Los 3 estados del gasto planificado.  El estado de cada fila llega en d.ESTADO_FASE. */
+  /* Los 3 estados del gasto planificado, con la paleta pedida:
+     Programado=amarillo · Modificado=naranja · Ejecutado=verde. El estado de
+     cada fila llega en d.ESTADO_FASE. */
   const FASES=[
-    {key:'PROGRAMADO',label:'Programado',dot:'bg-gray-400',col:'border-gray-300',chip:'bg-gray-100 text-gray-600',ring:'ring-gray-400',tint:''},
-    {key:'MODIFICADO',label:'Modificado',dot:'bg-warning',col:'border-warning',chip:'bg-warning/20 text-yellow-700',ring:'ring-warning',tint:'bg-warning/10'},
-    {key:'EJECUTADO', label:'Ejecutado', dot:'bg-primary',col:'border-primary',chip:'bg-primary/15 text-primary-dark',ring:'ring-primary',tint:'bg-primary/5'}];
+    {key:'PROGRAMADO',label:'Programado',dot:'bg-yellow-400',col:'border-yellow-400',chip:'bg-yellow-100 text-yellow-700',ring:'ring-yellow-400',tint:'bg-yellow-50'},
+    {key:'MODIFICADO',label:'Modificado',dot:'bg-orange-500',col:'border-orange-500',chip:'bg-orange-100 text-orange-700',ring:'ring-orange-500',tint:'bg-orange-50'},
+    {key:'EJECUTADO', label:'Ejecutado', dot:'bg-emerald-500',col:'border-emerald-500',chip:'bg-emerald-100 text-emerald-700',ring:'ring-emerald-500',tint:'bg-emerald-50'}];
   const FMAP=Object.fromEntries(FASES.map(f=>[f.key,f]));
+  // Colores hex de las mismas 3 etapas, para pintar cabeceras de grupo cuando se agrupa por fase.
+  const FASE_HEX={PROGRAMADO:['#eab308','#fefce8'],MODIFICADO:['#f97316','#fff7ed'],EJECUTADO:['#10b981','#ecfdf5']};
+  /* Qué columna pertenece a qué etapa, para pintar cabecera (color fuerte) y
+     celdas de dato (tinte claro) exactamente igual que en el Excel. */
+  const COLFASE={CANTIDAD_PROG:'PROGRAMADO',PRECIO_UNIT_PROG:'PROGRAMADO',IMPORTE_PROG:'PROGRAMADO',
+                 CANTIDAD_MOD:'MODIFICADO',PRECIO_UNIT_MOD:'MODIFICADO',IMPORTE_MOD:'MODIFICADO',
+                 CANTIDAD_EJEC:'EJECUTADO',PRECIO_UNIT_EJEC:'EJECUTADO',IMPORTE_EJEC:'EJECUTADO'};
+  const FASE_TXT='#1e3a8a'; // texto azul sobre los encabezados de fase
   const money=n=>(+n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
   const ec=s=>(s||'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   /* Estado consolidado del ítem: viene calculado desde la capa Query (ESTADO_FASE). */
@@ -544,8 +568,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   const $=id=>document.getElementById(id);
   const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),sortEl=$('sort'),perPageEl=$('perPage');
   const vTable=$('viewTable'),vKanban=$('viewKanban'),theadEl=$('thead'),tbodyEl=$('tbody'),tfootEl=$('tfoot');
-  /* Filtros multi-select: meta/act/clasif/fuente son ARRAYS de valores marcados. */
-  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:[],act:[],clasif:[],fuente:[],fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
+  /* Filtros multi-select: meta/act/clasif/fuente son ARRAYS de valores marcados.
+     ejec: '' = todos · 'si' = solo lo ejecutado (comprado) · 'no' = solo lo pendiente. */
+  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:[],act:[],clasif:[],fuente:[],fase:'<?= htmlspecialchars($fFase) ?>',ejec:'<?= htmlspecialchars($fEjec) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
   /* consultado = ya se trajo data del servidor al menos una vez. Distingue
      "todavía no consulté" (placeholder) de "consulté y no hubo resultados". */
   let mode='table', agrupar=true, prevSort='mod_desc', consultado=false, last={rows:[],total:0,summary:[]};
@@ -601,9 +626,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
-    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
     completo  :()=>ALLC.slice()
   };
@@ -688,7 +713,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   colBadge();
   /* ═══════════════ fin selector de campos ═══════════════ */
 
-  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta.join(','),act:st.act.join(','),clasif:st.clasif.join(','),fuente:st.fuente.join(','),fase:st.fase,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
+  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta.join(','),act:st.act.join(','),clasif:st.clasif.join(','),fuente:st.fuente.join(','),fase:st.fase,ejec:st.ejec,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
   function updateExport(){
     const cx={cols:COLS().filter(k=>!k.startsWith('__')).join(','),
               groupby:(agrupar?groupBy:''), agrupar:(agrupar?'1':'0'), _:Date.now()};
@@ -730,7 +755,16 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
                :f.key==='MODIFICADO'?'Total vigente del cuadro modificado'
                :'Total efectivamente ejecutado')+'  ·  '+g.c+' ítems en esta fase (clic para filtrar)';
       chipsEl.appendChild(chip(f.label,g.c,TOT[f.key],f.chip,f.ring,st.fase===f.key,
-        ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});}
+        ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});
+    /* Badge PENDIENTE (rojo, mayúscula): reemplaza al selector "Ejecutado/No
+       ejecutado". Pendiente = ítems sin ejecución (IMPORTE_EJEC = 0), o sea
+       todo lo que NO cae en la fase Ejecutado. El monto es el saldo que falta
+       por ejecutar (Modificado - Ejecutado). Clic para filtrar/quitar filtro. */
+    const eC=map.EJECUTADO?+map.EJECUTADO.c:0, pendC=Math.max(0,tc-eC), pendMonto=Math.max(0,tMod-tEjec);
+    chipsEl.appendChild(chip('PENDIENTE',pendC,pendMonto,'bg-red-100 text-red-700 uppercase tracking-wide','ring-red-500',st.ejec==='no',
+      ()=>{st.ejec=(st.ejec==='no'?'':'no');st.page=1;load();},'bg-red-500',
+      'Ítems sin ejecución (IMPORTE_EJEC = 0) · saldo por ejecutar S/ '+money(pendMonto)+' · clic para filtrar'));
+  }
 
   function chip(label,count,monto,cls,ring,active,onclick,dot,tip){const b=document.createElement('button');if(tip)b.title=tip;b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all '+cls+(active?(' ring-2 ring-offset-1 '+ring):' opacity-90 hover:opacity-100');b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full '+dot+'"></span>':'')+'<span>'+label+'</span><span class="opacity-60">·</span><span>'+count+'</span><span class="opacity-60">S/ '+money(monto)+'</span>';b.onclick=onclick;return b;}
 
@@ -841,10 +875,13 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
     theadEl.innerHTML='<th class="px-1 py-2 w-8 text-center">'
         +'<input type="checkbox" id="selAll" class="accent-primary align-middle" title="Seleccionar todo lo visible"></th>'
-      +cols.map(k=>
-        k==='__FASE' ? '<th class="px-2 py-2 w-6"></th>'
-      : k==='__CMN'  ? '<th class="px-2 py-2 font-semibold text-left">ESTADO CMN</th>'
-      : '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'">'+ec(HEADERS[k])+'</th>').join('');
+      +cols.map(k=>{
+        const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null;
+        const st=fh?' style="background:'+fh[0]+';color:'+FASE_TXT+'"':'';
+        if(k==='__FASE') return '<th class="px-2 py-2 w-6"'+st+'></th>';
+        if(k==='__CMN')  return '<th class="px-2 py-2 font-semibold text-left"'+st+'>ESTADO CMN</th>';
+        return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';
+      }).join('');
     if(!vista.length){tbodyEl.innerHTML='<tr><td colspan="'+nCols+'" class="px-3 py-6 text-center text-gray-400">'+(aislar&&SEL.size?'No hay filas seleccionadas en esta página':'Sin resultados')+'</td></tr>';tfootEl.innerHTML='';selBar();return;}
 
     const codBien=d=>[d.GRUPO_BIEN,d.CLASE_BIEN,d.FAMILIA_BIEN,d.ITEM_BIEN].map(x=>(x||'').toString()).join('');
@@ -870,14 +907,29 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       if(sel) style+='background:#dbeafe;box-shadow:inset 5px 0 0 #2563eb;';
       const f=FMAP[faseKey(d)];
       const cells=cols.map((k,ci)=>{
+        const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null, bgTint=fh?'background:'+fh[1]+';':'';
         if(k==='__FASE') return '<td class="py-1 text-center px-2" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
         if(k==='__CMN')  return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
         if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
+        if(k==='ESTADO_EJEC'){
+          /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
+             Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
+          const ej=(+d.IMPORTE_EJEC)>0.005;
+          return '<td class="px-2 py-1"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
+               +(ej?'bg-primary/15 text-primary-dark':'bg-red-100 text-red-700')+'">'+(ej?'Ejecutado':'Pendiente')+'</span></td>';
+        }
+        if(k==='IMPORTE_PROG'){
+          /* Sin importe programado pero con modificado/ejecutado: se resalta en
+             rojo como aviso de sobregiro, pero el importe mostrado es SIEMPRE
+             su valor real (0.00) — nunca un número negativo inventado. */
+          const sinProg=(+d.IMPORTE_PROG)<=0.005 && ((+d.IMPORTE_MOD)>0.005 || (+d.IMPORTE_EJEC)>0.005);
+          return '<td class="px-2 py-1 text-right tabular-nums'+(sinProg?' font-bold':'')+'" style="'+bgTint+(sinProg?'color:'+DIF_ROJO:'')+'" title="'+(sinProg?'SOBREGIRADO: sin importe programado':'')+'">'+money(+d.IMPORTE_PROG)+'</td>';
+        }
         if(k==='DIFERENCIA') return '<td class="px-2 py-1 text-right tabular-nums font-semibold underline decoration-2 underline-offset-2" style="color:'+((+d[k])<-0.005?DIF_ROJO:DIF_AMBAR)+'">'+money(d[k])+'</td>';
         return NUM.has(k)
-          ? '<td class="px-2 py-1 text-right tabular-nums">'+money(d[k])+'</td>'
-          : '<td class="px-2 py-1">'+ec(d[k])+'</td>';
+          ? '<td class="px-2 py-1 text-right tabular-nums" style="'+bgTint+'">'+money(d[k])+'</td>'
+          : '<td class="px-2 py-1" style="'+bgTint+'">'+ec(d[k])+'</td>';
       }).join('');
       return '<tr class="itemrow trow'+(dentro||sel?'':' bg-white hover:bg-gray-50')+'" style="'+style+'" data-idx="'+idx+'" title="Doble clic para ver el expediente">'+cellMark(d,dentro)+cells+'</tr>';
     };
@@ -888,7 +940,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       const keys=Object.keys(g).sort();
       keys.forEach((k,gi)=>{
         const items=g[k].sort((a,b)=>codBien(a)<codBien(b)?-1:codBien(a)>codBien(b)?1:0);
-        const c=grpColor(k), cerrado=colapsados.has(k);
+        // Cuando se agrupa por fase, usar la paleta amarillo/naranja/verde de FASES
+        // en vez del color por hash, para que el color del bloque coincida con la etapa.
+        const c=(groupBy==='ESTADO_FASE'&&FASE_HEX[k])?FASE_HEX[k]:grpColor(k), cerrado=colapsados.has(k);
         const sP=items.reduce((s,x)=>s+ +x.IMPORTE_PROG,0),sM=items.reduce((s,x)=>s+ +x.IMPORTE_MOD,0),
               sE=items.reduce((s,x)=>s+ +x.IMPORTE_EJEC,0),sD=items.reduce((s,x)=>s+ +x.DIFERENCIA,0),
               sDev=items.reduce((s,x)=>s+ +x.DEVENGADO,0),sSaldo=items.reduce((s,x)=>s+ +x.SALDO_DEVENGAR,0);
@@ -941,7 +995,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
   function renderKanban(rows){vKanban.innerHTML='';const vis=st.fase?FASES.filter(f=>f.key===st.fase):FASES;
     vis.forEach(f=>{const g=[];rows.forEach((d,i)=>{if(faseKey(d)===f.key)g.push({d,i});});const monto=g.reduce((s,x)=>s+ +x.d.IMPORTE_MOD,0);
-      const col=document.createElement('div');col.className='flex-shrink-0 w-72 bg-gray-100/70 rounded-xl flex flex-col max-h-[calc(100vh-360px)]';
+      const col=document.createElement('div');col.className='min-w-0 bg-gray-100/70 rounded-xl flex flex-col max-h-[calc(100vh-280px)]';
       col.innerHTML='<div class="p-3 border-b border-gray-200"><div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full '+f.dot+'"></span><span class="font-semibold text-sm text-gray-700">'+f.label+'</span><span class="ml-auto text-xs bg-white px-2 py-0.5 rounded-full text-gray-500">'+g.length+'</span></div><div class="text-[11px] text-gray-500 mt-1">S/ '+money(monto)+' (página)</div></div>';
       const body=document.createElement('div');body.className='p-2 space-y-2 overflow-y-auto';
       body.innerHTML=g.length?g.map(x=>card(x.d,f,x.i)).join(''):'<p class="text-center text-xs text-gray-400 py-6">Sin ítems</p>';
@@ -1486,7 +1540,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   sw.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
 
   /* controles */
-  let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},350);});
+  let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},600);});
   fTipoEl.addEventListener('change',()=>{st.tipo=fTipoEl.value;st.page=1;load();});
   /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════ */
   const MSF_LBL={meta:{all:'Todas las metas',pre:'meta'},act:{all:'Toda actividad',pre:'act'},clasif:{all:'Todo clasificador',pre:'clasif'},fuente:{all:'Toda fuente',pre:'fuente'}};
@@ -1559,6 +1613,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     SIGA.accion('Buscar ítem','fa-magnifying-glass',()=>{qEl.focus();qEl.select();},'Enfoca el buscador de ítems');
     SIGA.accion('Expandir todas las actividades','fa-up-right-and-down-left-from-center',()=>$('gExpand').click(),'Abre todos los bloques del agrupado');
     SIGA.accion('Contraer todas las actividades','fa-down-left-and-up-right-to-center',()=>$('gCollapse').click(),'Cierra todos los bloques del agrupado');
+    SIGA.accion('Solo ejecutados (comprado)','fa-check-double',()=>{st.fase=(st.fase==='EJECUTADO'?'':'EJECUTADO');st.page=1;load();},'Filtra solo lo que ya se compró');
+    SIGA.accion('Solo pendientes (no comprado)','fa-hourglass-half',()=>{st.ejec=(st.ejec==='no'?'':'no');st.page=1;load();},'Filtra solo lo que aún no se compra');
   }
 
   // set selects a estado inicial
@@ -1566,7 +1622,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   agrupar=(st.sort==='act_item');$('agrupar').checked=agrupar;
   $('groupBy').value=groupBy;
   setMode('table');
-  /* Con centro elegido se consulta directo; sin centro, estado inicial. */
   if(CC!=='') load(); else placeholder();
 })();
 </script>
