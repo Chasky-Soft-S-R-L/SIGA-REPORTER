@@ -44,9 +44,9 @@ class ExportService
      *  · Ejecutado=verde. Mismos valores que el frontend, para que el Excel
      *  se vea idéntico a la pantalla. */
     private const FASE_HEX = [
-        'PROGRAMADO' => ['#FFFF00', '#fefce8'],
-        'MODIFICADO' => ['#FFC000', '#fff7ed'],
-        'EJECUTADO'  => ['#47D359', '#ecfdf5'],
+        'PROGRAMADO' => ['#eab308', '#fefce8'],
+        'MODIFICADO' => ['#f97316', '#fff7ed'],
+        'EJECUTADO'  => ['#10b981', '#ecfdf5'],
     ];
 
     /** Qué columna pertenece a qué etapa (CANTIDAD/PRECIO_UNIT/IMPORTE de cada una). */
@@ -215,6 +215,44 @@ class ExportService
         $titulo  = $meta['titulo']  ?? 'CUADRO DE NECESIDADES';
         $centro  = $meta['centro']  ?? 'TODOS LOS CENTROS';
 
+        /* Fila donde están los <th> (título + centro + generado + fila en
+           blanco + encabezado = 5 filas fijas antes de que empiecen los datos).
+           Si algún día se agrega o quita una fila de cabecera arriba, este
+           número hay que actualizarlo junto con ella. */
+        $filaEncabezado = 5;
+
+        /* ── Congelar encabezado ──────────────────────────────────────────
+           Este bloque XML (namespace "urn:schemas-microsoft-com:office:excel")
+           es la forma NO-binaria de decirle a Excel "las primeras N filas se
+           quedan fijas al hacer scroll" — Excel lo lee de <head> incluso en
+           este export basado en tabla HTML, sin necesidad de generar un
+           archivo binario XLSX ni agregar ninguna librería.
+           LÍMITE REAL DE EXCEL (no de este código): solo se pueden fijar
+           filas de ARRIBA y/o columnas de la IZQUIERDA. No existe forma de
+           fijar la última fila (el "TOTAL GENERAL") mientras se hace scroll
+           por el medio de la tabla — Excel no tiene esa función. */
+        echo '<html xmlns:o="urn:schemas-microsoft-com:office:office" '
+           . 'xmlns:x="urn:schemas-microsoft-com:office:excel" '
+           . 'xmlns="http://www.w3.org/TR/REC-html40">';
+        echo '<head><meta charset="UTF-8">';
+        echo '<!--[if gte mso 9]><xml>'
+           . '<x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>'
+           . '<x:Name>CMN</x:Name>'
+           . '<x:WorksheetOptions>'
+           . '<x:FreezePanes/>'
+           . '<x:FrozenNoSplit/>'
+           . '<x:SplitHorizontal>' . $filaEncabezado . '</x:SplitHorizontal>'
+           . '<x:TopRowBottomPane>' . $filaEncabezado . '</x:TopRowBottomPane>'
+           . '<x:ActivePane>2</x:ActivePane>'
+           . '<x:Panes><x:Pane><x:Number>3</x:Number></x:Pane><x:Pane><x:Number>2</x:Number></x:Pane></x:Panes>'
+           . '<x:ProtectContents>False</x:ProtectContents>'
+           . '<x:ProtectObjects>False</x:ProtectObjects>'
+           . '<x:ProtectScenarios>False</x:ProtectScenarios>'
+           . '</x:WorksheetOptions>'
+           . '</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook>'
+           . '</xml><![endif]-->';
+        echo '</head><body>';
+
         echo '<table border="0" cellspacing="0" cellpadding="3">';
 
         // ── Cabecera institucional ──
@@ -277,6 +315,7 @@ class ExportService
         );
 
         echo '</table>';
+        echo '</body></html>';
     }
 
     /**
