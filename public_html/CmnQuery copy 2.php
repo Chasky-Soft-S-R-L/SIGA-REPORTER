@@ -33,20 +33,6 @@
  *   en el centro 104.07.13.03.16: 0 casos de "saldo 0 legítimo", así que tratar el
  *   saldo 0 como "sin dato" (y caer al DET) es correcto. El CASE externo
  *   "... = 0 THEN 0" sigue cubriendo el caso legítimo de todo-excluido → vigente 0.
- *
- * FIX DATOS_EJECUCION (ESTADO_ORDEN) · billing scope bug:
- *   El bloque `ej` (lista de órdenes tipo "OS 171 · DEVENGADO · Cert 211" que se
- *   ve en la columna DATOS EJECUCION) antes hacía match SOLO por SEC_FUNC +
- *   CLASIFICADOR + ítem, vía SIG_ORDEN_ITEM_PPTO. Esa combinación NO identifica
- *   una fila única del cuadro: si el mismo ítem+meta+clasificador se usa en OTRA
- *   actividad operativa o en OTRO centro de costo (común con ítems genéricos como
- *   "servicio de mano de obra no calificada"), `ej` traía las órdenes de esas
- *   OTRAS actividades/centros también — la lista no coincidía con IMPORTE_EJEC/
- *   DEVENGADO de la fila (que sí están correctamente filtrados por centro+tarea
- *   vía `dev`/SIG_DEPEN_META_CUADRO). Se corrigió `ej` para que agregue por la
- *   MISMA clave que `dev` (centro + tarea + ítem, a través de
- *   SIG_CUADRO_ADQUISICION → SIG_DETALLE_BSERV_CUADRO → SIG_DEPEN_META_CUADRO)
- *   en vez de meta+clasificador+ítem.
  */
 class CmnQuery
 {
@@ -298,14 +284,9 @@ class CmnQuery
             ORDER BY cp.NRO_CERTIFICA DESC
         ) cert
         LEFT JOIN (
-            /* FIX: agrupado por CENTRO + TAREA + ÍTEM (misma clave que `dev`,
-               vía SIG_DEPEN_META_CUADRO) en vez de META + CLASIFICADOR + ÍTEM.
-               Antes esto mezclaba órdenes de otras actividades/centros que
-               compartían el mismo ítem+meta+clasificador. */
             SELECT
-                ca.SEC_EJEC, ca.ANO_EJE,
-                dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
-                db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
+                g.SEC_EJEC, g.ANO_EJE, g.SEC_FUNC, g.CLASIFICADOR,
+                g.TIPO_BIEN, g.GRUPO_BIEN, g.CLASE_BIEN, g.FAMILIA_BIEN, g.ITEM_BIEN,
                 STUFF((
                     SELECT DISTINCT ', ' + CASE WHEN oa2.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END
                            + CONVERT(VARCHAR, oa2.NRO_ORDEN)
@@ -317,8 +298,8 @@ class CmnQuery
                                         AND dvi2.NRO_DEVENGADO=dv2.NRO_DEVENGADO
                                     WHERE dv2.SEC_EJEC=oa2.SEC_EJEC AND dv2.ANO_EJE=oa2.ANO_EJE
                                       AND dv2.NRO_ORDEN=oa2.NRO_ORDEN AND dv2.TIPO_BIEN=oa2.TIPO_BIEN
-                                      AND dvi2.GRUPO_BIEN=db2.GRUPO_BIEN AND dvi2.CLASE_BIEN=db2.CLASE_BIEN
-                                      AND dvi2.FAMILIA_BIEN=db2.FAMILIA_BIEN AND dvi2.ITEM_BIEN=db2.ITEM_BIEN
+                                      AND dvi2.GRUPO_BIEN=oi2.GRUPO_BIEN AND dvi2.CLASE_BIEN=oi2.CLASE_BIEN
+                                      AND dvi2.FAMILIA_BIEN=oi2.FAMILIA_BIEN AND dvi2.ITEM_BIEN=oi2.ITEM_BIEN
                                ) THEN ' · DEVENGADO'
                                WHEN ISNULL(oa2.EXP_SIAF,0) <> 0     THEN ' · COMPROMETIDO'
                                WHEN ISNULL(oa2.NRO_CERTIFICA,0) <> 0 THEN ' · CERTIFICADO'
@@ -327,51 +308,37 @@ class CmnQuery
                            + CASE WHEN ISNULL(oa2.NRO_CERTIFICA,0) <> 0
                                   THEN ' · Cert ' + CONVERT(VARCHAR, oa2.NRO_CERTIFICA)
                                   ELSE '' END
-                    FROM   SIG_CUADRO_ADQUISICION ca2
-                    JOIN   SIG_DETALLE_BSERV_CUADRO db2
-                           ON db2.SEC_EJEC=ca2.SEC_EJEC AND db2.ANO_EJE=ca2.ANO_EJE
-                          AND db2.TIPO_BIEN=ca2.TIPO_BIEN AND db2.SEC_CUADRO=ca2.SEC_CUADRO
-                    JOIN   SIG_DEPEN_META_CUADRO dm2
-                           ON dm2.SEC_EJEC=db2.SEC_EJEC AND dm2.ANO_EJE=db2.ANO_EJE
-                          AND dm2.TIPO_BIEN=db2.TIPO_BIEN AND dm2.SEC_CUADRO=db2.SEC_CUADRO
-                          AND dm2.SECUENCIA=db2.SECUENCIA
-                    JOIN   SIG_ORDEN_ADQUISICION oa2
-                           ON oa2.SEC_EJEC=ca2.SEC_EJEC AND oa2.ANO_EJE=ca2.ANO_EJE
-                          AND oa2.NRO_ORDEN=ca2.NRO_ORDEN AND oa2.TIPO_BIEN=ca2.TIPO_BIEN
-                          AND oa2.ESTADO<>'A'
-                    WHERE  ca2.SEC_EJEC=ca.SEC_EJEC AND ca2.ANO_EJE=ca.ANO_EJE AND ca2.ESTADO<>'A'
-                      AND  dm2.CENTRO_COSTO=dm.CENTRO_COSTO
-                      AND  dm2.TIPO_TAREA=dm.TIPO_TAREA AND dm2.NIVEL_TAREA=dm.NIVEL_TAREA
-                      AND  dm2.CODIGO_TAREA=dm.CODIGO_TAREA
-                      AND  db2.TIPO_BIEN=db.TIPO_BIEN AND db2.GRUPO_BIEN=db.GRUPO_BIEN
-                      AND  db2.CLASE_BIEN=db.CLASE_BIEN AND db2.FAMILIA_BIEN=db.FAMILIA_BIEN
-                      AND  db2.ITEM_BIEN=db.ITEM_BIEN
+                    FROM   SIG_ORDEN_ADQUISICION oa2
+                    JOIN   SIG_ORDEN_ITEM oi2
+                           ON oi2.SEC_EJEC=oa2.SEC_EJEC AND oi2.ANO_EJE=oa2.ANO_EJE
+                          AND oi2.NRO_ORDEN=oa2.NRO_ORDEN AND oi2.TIPO_BIEN=oa2.TIPO_BIEN
+                    JOIN   SIG_ORDEN_ITEM_PPTO oip2
+                           ON oip2.SEC_EJEC=oa2.SEC_EJEC AND oip2.ANO_EJE=oa2.ANO_EJE
+                          AND oip2.NRO_ORDEN=oa2.NRO_ORDEN AND oip2.TIPO_BIEN=oa2.TIPO_BIEN
+                          AND oip2.SEC_FUNC=g.SEC_FUNC AND oip2.CLASIFICADOR=g.CLASIFICADOR
+                    WHERE  oa2.SEC_EJEC=g.SEC_EJEC AND oa2.ANO_EJE=g.ANO_EJE AND oa2.ESTADO<>'A'
+                      AND  oi2.TIPO_BIEN=g.TIPO_BIEN AND oi2.GRUPO_BIEN=g.GRUPO_BIEN
+                      AND  oi2.CLASE_BIEN=g.CLASE_BIEN AND oi2.FAMILIA_BIEN=g.FAMILIA_BIEN
+                      AND  oi2.ITEM_BIEN=g.ITEM_BIEN
                     FOR XML PATH(''), TYPE).value('.','NVARCHAR(MAX)'), 1, 2, '') AS ORDENES
-            FROM   SIG_CUADRO_ADQUISICION ca
-            JOIN   SIG_DETALLE_BSERV_CUADRO db
-                   ON db.SEC_EJEC=ca.SEC_EJEC AND db.ANO_EJE=ca.ANO_EJE
-                  AND db.TIPO_BIEN=ca.TIPO_BIEN AND db.SEC_CUADRO=ca.SEC_CUADRO
-            JOIN   SIG_DEPEN_META_CUADRO dm
-                   ON dm.SEC_EJEC=db.SEC_EJEC AND dm.ANO_EJE=db.ANO_EJE
-                  AND dm.TIPO_BIEN=db.TIPO_BIEN AND dm.SEC_CUADRO=db.SEC_CUADRO
-                  AND dm.SECUENCIA=db.SECUENCIA
-            WHERE  ca.ESTADO<>'A'
-              AND  EXISTS (
-                    SELECT 1 FROM SIG_ORDEN_ADQUISICION oa
-                    WHERE oa.SEC_EJEC=ca.SEC_EJEC AND oa.ANO_EJE=ca.ANO_EJE
-                      AND oa.NRO_ORDEN=ca.NRO_ORDEN AND oa.TIPO_BIEN=ca.TIPO_BIEN
-                      AND oa.ESTADO<>'A'
-              )
-            GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
-                     dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
-                     db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN
+            FROM (
+                SELECT DISTINCT
+                       oip.SEC_EJEC, oip.ANO_EJE, oip.SEC_FUNC, oip.CLASIFICADOR,
+                       oi.TIPO_BIEN, oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN
+                FROM   SIG_ORDEN_ADQUISICION oa
+                JOIN   SIG_ORDEN_ITEM oi
+                       ON oi.SEC_EJEC=oa.SEC_EJEC AND oi.ANO_EJE=oa.ANO_EJE
+                      AND oi.NRO_ORDEN=oa.NRO_ORDEN AND oi.TIPO_BIEN=oa.TIPO_BIEN
+                JOIN   SIG_ORDEN_ITEM_PPTO oip
+                       ON oip.SEC_EJEC=oa.SEC_EJEC AND oip.ANO_EJE=oa.ANO_EJE
+                      AND oip.NRO_ORDEN=oa.NRO_ORDEN AND oip.TIPO_BIEN=oa.TIPO_BIEN
+                WHERE  oa.ESTADO<>'A'
+            ) g
         ) ej
              ON ej.SEC_EJEC     = D.SEC_EJEC
             AND ej.ANO_EJE      = D.ANNO_PROG
-            AND ej.CENTRO_COSTO = D.CENTRO_COSTO
-            AND ej.TIPO_TAREA   = D.TIPO_TAREA
-            AND ej.NIVEL_TAREA  = D.NIVEL_TAREA
-            AND ej.CODIGO_TAREA = D.CODIGO_TAREA
+            AND ej.SEC_FUNC     = D.SEC_FUNC
+            AND ej.CLASIFICADOR = D.CLASIFICADOR
             AND ej.TIPO_BIEN    = D.TIPO_BIEN  AND ej.GRUPO_BIEN=D.GRUPO_BIEN
             AND ej.CLASE_BIEN   = D.CLASE_BIEN AND ej.FAMILIA_BIEN=D.FAMILIA_BIEN
             AND ej.ITEM_BIEN    = D.ITEM_BIEN
@@ -894,12 +861,6 @@ class CmnQuery
      *   nro_certifica · orden (OC/OS n) · proveedor · fecha · exp_siaf ·
      *   estado_siaf (0=sin compromiso, 2=comprometido) · comprometido · devengado
      * El front arma el árbol Certificación → Orden(es) → Devengado a partir de esto.
-     *
-     * NOTA: esta traza es DELIBERADAMENTE global (toda la entidad, sin filtrar
-     * por centro/actividad) — a diferencia de DATOS EJECUCION (ver el fix arriba
-     * en innerSql/ej), que ahora sí está acotado a centro+tarea. Por eso el árbol
-     * puede seguir mostrando más órdenes que la fila puntual: aquí es la
-     * intención del diseño, no el bug que se corrigió.
      */
     public function trazaItem(int $anioEjec, int $secEjec,
                               string $tipo, string $g, string $c, string $f, string $it): array

@@ -941,7 +941,14 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         if(k==='__FASE') return '<td class="py-1 text-center px-2" style="'+wCss+'" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
         if(k==='__CMN')  return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
-        if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
+        if(k==='ESTADO_ORDEN'){
+          /* Antes usaba flex-wrap: con varias órdenes las badges saltaban a
+             2-3 líneas y agrandaban toda la fila. Ahora es una sola línea
+             (sin flex-wrap, contenida por overflow:hidden del ancho fijo de
+             la columna); el listado completo se ve al pasar el mouse, en el
+             title del td — mismo patrón que el resto de columnas de texto. */
+          return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden" title="'+ec(d[k])+'"><div class="flex gap-1 overflow-hidden whitespace-nowrap">'+badge(d[k])+'</div></td>';
+        }
         if(k==='ESTADO_EJEC'){
           /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
              Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
