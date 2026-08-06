@@ -264,6 +264,8 @@ class ExportService
            . date('d/m/Y H:i') . '</td></tr>';
         echo '<tr><td colspan="' . $nCols . '"></td></tr>';
 
+        $tot = self::totales($rows);
+
         // ── Encabezados de columna: las de Programado/Modificado/Ejecutado van
         //    en amarillo/naranja/verde con texto azul, igual que en pantalla. ──
         echo '<tr>';
@@ -278,7 +280,19 @@ class ExportService
         }
         echo '</tr>';
 
-        $tot = self::totales($rows);
+        /* TOTAL GENERAL duplicado aquí, pegado al encabezado: Excel no permite
+           fijar la última fila de la hoja (eso NO existe como función), pero sí
+           fijar filas de arriba — así que la forma de que el total quede
+           siempre visible al hacer scroll es ponerlo también acá arriba, junto
+           con los títulos de columna, dentro del mismo bloque congelado.
+           La fila de TOTAL GENERAL de siempre (al final de los datos) se
+           mantiene igual, para cuando se imprime o se revisa el cierre. */
+        echo self::filaTotales(
+            'TOTAL GENERAL',
+            $tot,
+            'background:#374151;color:#fff;font-weight:bold;',
+            'background:#374151;color:#fff;font-weight:bold;text-align:right'
+        );
 
         if ($agrupar) {
             foreach (self::agrupar($rows, $by) as $act => $items) {
