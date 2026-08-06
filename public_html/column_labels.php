@@ -148,9 +148,9 @@ final class Labels
 
     /** Las 3 fases del gasto: clave interna → texto mostrado en chip/kanban/grupo. */
   public const FASES = [
-    'PROGRAMADO' => 'CERTIFICADO',
-    'MODIFICADO' => 'COMPROMISO',
-    'EJECUTADO'  => 'DEVENGADO',
+    'PROGRAMADO' => 'PROGRAMADO',
+    'MODIFICADO' => 'MODIFICADO',
+    'EJECUTADO'  => 'EJECUTADO',
 ];
     /** Campos por los que se puede agrupar la tabla → texto largo (panel de campos). */
     public const GROUP_BY = [
