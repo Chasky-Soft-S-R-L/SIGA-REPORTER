@@ -13,11 +13,16 @@
  * CONFIGURACIÓN: servidor, base, SEC_EJEC y año por defecto salen del .env a
  * través de config.php. No hay credenciales escritas en este archivo.
  * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
+ *
+ * LABELS: todos los nombres de columnas, fases, agrupado, orden y estado CMN
+ * viven en column_labels.php (clase Labels). Para renombrar cualquier texto
+ * de la pantalla, el Excel o el PDF, edita solo ese archivo.
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/CmnQuery.php';
 require_once __DIR__ . '/ExportService.php';
+require_once __DIR__ . '/column_labels.php';
 
 /* ---- SEGURIDAD: sin sesión no se entra (protege vista, endpoints y export) ---- */
 $auth = new Auth();
@@ -39,9 +44,12 @@ $fAct    = (string)($_GET['act'] ?? '');
 $fClasif = (string)($_GET['clasif'] ?? '');
 $fFuente = (string)($_GET['fuente'] ?? '');
 $fFase   = (string)($_GET['fase'] ?? '');
+/* Ejecutado/No ejecutado: 'si' = solo lo que YA se compró (IMPORTE_EJEC > 0),
+   'no' = solo lo que NO se ha comprado (IMPORTE_EJEC = 0), '' = ambos. */
+$fEjec   = in_array($_GET['ejec'] ?? '', ['si','no'], true) ? $_GET['ejec'] : '';
 $fSort   = (string)($_GET['sort'] ?? 'act_item');
 $page    = max(1, (int)($_GET['page'] ?? 1));
-$perPage = min(200, max(10, (int)($_GET['perPage'] ?? 50)));
+$perPage = min(300, max(10, (int)($_GET['perPage'] ?? 300)));
 
 if ($resource !== 'cmn') { http_response_code(404); exit('Recurso no encontrado'); }
 
@@ -66,7 +74,13 @@ if ($export === 'excel' || $export === 'pdf') {
     // Evita que el navegador sirva un export cacheado tras cambiar el backend.
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
-    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente)['rows'];
+    $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente,$fEjec)['rows'];
+    // Estado de ejecución por ítem (Pendiente / Ejecutado), igual que en
+    // pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista web.
+    foreach ($all as &$r) {
+        $r['ESTADO_EJEC'] = ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) ? 'Ejecutado' : 'Pendiente';
+    }
+    unset($r);
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
     // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
     $ccNom = 'TODOS LOS CENTROS';
@@ -153,8 +167,8 @@ if ($action === 'data') {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     try {
-        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente);
-        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente);
+        $res = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,$page,$perPage,$fClasif,$fFuente,$fEjec);
+        $sum = $q->summary($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fClasif,$fFuente,$fEjec);
         echo json_encode(['rows'=>$res['rows'],'total'=>$res['total'],'page'=>$page,'perPage'=>$perPage,'summary'=>$sum], JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[index/data] ' . $e->getMessage());
@@ -166,10 +180,7 @@ if ($action === 'data') {
 /* ---- RENDER SHELL ---- */
 $centros   = $q->centros($anioProg,$anioEjec,SEC_EJEC);
 $opts      = $q->opciones($anioProg,$anioEjec,SEC_EJEC,$ccosto);
-$H         = ExportService::HEADERS;
-$NUM       = array_keys(array_flip(ExportService::NUM));
-$jsonH     = json_encode($H, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
-$jsonNum   = json_encode($NUM, JSON_HEX_TAG);
+$jsonLbl   = Labels::toJs();  // única fuente de verdad: columnas, fases, agrupado, orden, estado CMN
 $jsonCent  = json_encode($centros, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
 $ccostoNombre='';
 foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  ·  '.$c['nombre'];break;} }
@@ -193,7 +204,7 @@ $ACCIONES  = '
 include __DIR__ . '/partials/head.php';
 ?>
 <body class="bg-gray-50 text-gray-800">
-<div class="flex min-h-screen">
+<div class="flex min-h-screen siga-shell">
   <?php include __DIR__ . '/partials/sidebar.php'; ?>
 
   <main class="flex-1 min-w-0 p-3 sm:p-4 flex flex-col">
@@ -230,7 +241,7 @@ include __DIR__ . '/partials/head.php';
         <!-- Filtros multi-select tipo Excel (checkboxes). El botón muestra el conteo. -->
         <div class="msf relative" data-msf="meta">
           <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Todas las metas</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['meta']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-56 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -244,7 +255,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="act">
           <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Toda actividad</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['act']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-64 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -258,7 +269,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="clasif">
           <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Todo clasificador</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['clasif']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -272,7 +283,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="fuente">
           <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Toda fuente</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['fuente']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -285,17 +296,17 @@ include __DIR__ . '/partials/head.php';
           </div>
         </div>
         <select id="sort" class="input-bordered w-44">
-          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option><option value="act_item">Actividad + código ítem</option><option value="clasif">Clasificador + ítem</option></select>
+          <?php foreach (Labels::SORT_OPTIONS as $val => $txt): ?>
+            <option value="<?= htmlspecialchars($val) ?>"><?= htmlspecialchars($txt) ?></option>
+          <?php endforeach; ?>
+        </select>
         <label class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 cursor-pointer select-none whitespace-nowrap">
           <input type="checkbox" id="agrupar" class="accent-primary" checked> Agrupar
         </label>
         <select id="groupBy" class="input-bordered w-44 py-2" title="Agrupar por…">
-          <option value="ACTIV_OPERAT_COD">por Actividad</option>
-          <option value="CLASIF_COD">por Clasificador</option>
-          <option value="META">por Meta</option>
-          <option value="GENERICA">por Genérica</option>
-          <option value="FF">por Fuente Financ.</option>
-          <option value="ESTADO_FASE">por Fase</option>
+          <?php foreach (Labels::GROUP_BY_SELECT as $val => $txt): ?>
+            <option value="<?= htmlspecialchars($val) ?>"><?= htmlspecialchars($txt) ?></option>
+          <?php endforeach; ?>
         </select>
         <button id="gExpand" type="button" title="Expandir todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-plus"></i></button>
         <button id="gCollapse" type="button" title="Contraer todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-minus"></i></button>
@@ -324,21 +335,21 @@ include __DIR__ . '/partials/head.php';
       </div>
     </div>
 
-    <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto max-h-[calc(100vh-320px)]" style="-webkit-overflow-scrolling:touch">
+    <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto flex-1 min-h-[280px]" style="-webkit-overflow-scrolling:touch">
       <table class="min-w-full text-xs whitespace-nowrap">
         <thead class="sticky top-0 z-10"><tr id="thead" class="bg-primary text-white"></tr></thead>
         <tbody id="tbody"></tbody>
         <tfoot id="tfoot" class="sticky bottom-0"></tfoot>
       </table>
     </div>
-    <div id="viewKanban" class="hidden flex-1 flex gap-3 overflow-x-auto pb-2" style="-webkit-overflow-scrolling:touch"></div>
+    <div id="viewKanban" class="hidden kanbanGrid flex-1 min-h-[280px] overflow-y-auto pb-2"></div>
 
     <!-- Paginación -->
     <div class="flex items-center justify-between gap-3 mt-3 text-sm">
       <span id="pageInfo" class="text-gray-500"></span>
       <div class="flex items-center gap-2">
         <select id="perPage" class="input-bordered w-auto py-1.5">
-          <option value="25">25</option><option value="50" selected>50</option><option value="100">100</option><option value="200">200</option>
+          <option value="25">25</option><option value="50">50</option><option value="100">100</option><option value="200">200</option><option value="300" selected>300</option>
         </select>
         <button id="prev" class="px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-100 disabled:opacity-40">‹</button>
         <span id="pageNum" class="px-2 text-gray-600"></span>
@@ -450,11 +461,26 @@ include __DIR__ . '/partials/head.php';
 </style>
 
 <style>
+  /* ── Scroll interno (≥sm): la barra de herramientas y la cabecera de la tabla
+       quedan fijas; solo el cuerpo se desplaza, manteniendo la cabecera arriba
+       (cuadro morado/primary) y la barra horizontal siempre a la vista. ── */
+  @media (min-width:640px){
+    .siga-shell{height:100vh;overflow:hidden}
+    .siga-shell main{min-height:0}
+    #viewTable{min-height:0}
+  }
+  /* Mejor legibilidad de los datos sobre la barra de grupo de color (verde, etc.) */
+  tr.ghead{text-shadow:0 1px 2px rgba(0,0,0,.28)}
   /* ── Filtros multi-select tipo Excel ── */
   .msf-btn{cursor:pointer}
   .msf-btn.msf-on{border-color:var(--primary,#059669)!important;color:var(--primary,#059669);font-weight:600}
   .msf-pop{min-width:100%}
-  /* ── Loader elegante ───────────────────────────── */
+  /* ── Kanban responsivo: grid que llena el ancho disponible en vez de columnas
+     fijas con scroll horizontal (evita la franja en blanco a la derecha en
+     pantallas anchas). !important en .hidden para que gane siempre al toggle
+     tabla/kanban, sin importar el orden de las reglas de Tailwind. */
+  #viewKanban.kanbanGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:.75rem;align-content:start}
+  #viewKanban.hidden{display:none!important}
   #loadBar{position:fixed;top:0;left:0;right:0;height:3px;z-index:60;background:transparent;overflow:hidden;opacity:0;transition:opacity .2s}
   #loadBar.on{opacity:1}
   #loadBar span{position:absolute;inset:0;width:40%;border-radius:99px;
@@ -528,14 +554,29 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
 /* ===== Datos paginados + Tabla/Kanban ===== */
 (function(){
-  const HEADERS=<?= $jsonH ?>, NUM=new Set(<?= $jsonNum ?>), HKEYS=Object.keys(HEADERS);
+  /* Única fuente de verdad de nombres: LBL (viene de Labels::toJs() en PHP,
+     definido en column_labels.php). Para renombrar cualquier columna, fase,
+     texto de "Ordenar por"/"Agrupar por" o estado CMN: edita SOLO ese archivo,
+     nunca este bloque. */
+  const LBL=<?= $jsonLbl ?>;
+  const HEADERS=LBL.columns, NUM=new Set(LBL.numericColumns), HKEYS=Object.keys(HEADERS);
   const ANIO='<?= $anioProg ?>', CC='<?= htmlspecialchars($ccosto ?? '') ?>';
-  /* Los 3 estados del gasto planificado.  El estado de cada fila llega en d.ESTADO_FASE. */
+  /* Los 3 estados del gasto planificado. El texto viene de LBL.fases; el
+     color/paleta (amarillo/naranja/verde) es una decisión de diseño y se
+     queda aquí. El estado de cada fila llega en d.ESTADO_FASE. */
   const FASES=[
-    {key:'PROGRAMADO',label:'Programado',dot:'bg-gray-400',col:'border-gray-300',chip:'bg-gray-100 text-gray-600',ring:'ring-gray-400',tint:''},
-    {key:'MODIFICADO',label:'Modificado',dot:'bg-warning',col:'border-warning',chip:'bg-warning/20 text-yellow-700',ring:'ring-warning',tint:'bg-warning/10'},
-    {key:'EJECUTADO', label:'Ejecutado', dot:'bg-primary',col:'border-primary',chip:'bg-primary/15 text-primary-dark',ring:'ring-primary',tint:'bg-primary/5'}];
+    {key:'PROGRAMADO',label:LBL.fases.PROGRAMADO,dot:'bg-yellow-400',col:'border-yellow-400',chip:'bg-yellow-100 text-yellow-700',ring:'ring-yellow-400',tint:'bg-yellow-50'},
+    {key:'MODIFICADO',label:LBL.fases.MODIFICADO,dot:'bg-orange-500',col:'border-orange-500',chip:'bg-orange-100 text-orange-700',ring:'ring-orange-500',tint:'bg-orange-50'},
+    {key:'EJECUTADO', label:LBL.fases.EJECUTADO, dot:'bg-emerald-500',col:'border-emerald-500',chip:'bg-emerald-100 text-emerald-700',ring:'ring-emerald-500',tint:'bg-emerald-50'}];
   const FMAP=Object.fromEntries(FASES.map(f=>[f.key,f]));
+  // Colores hex de las mismas 3 etapas, para pintar cabeceras de grupo cuando se agrupa por fase.
+  const FASE_HEX={PROGRAMADO:['#FFFF00','#fefce8'],MODIFICADO:['#FFC000','#fff7ed'],EJECUTADO:['#47D359','#ecfdf5']};
+  /* Qué columna pertenece a qué etapa, para pintar cabecera (color fuerte) y
+     celdas de dato (tinte claro) exactamente igual que en el Excel. */
+  const COLFASE={CANTIDAD_PROG:'PROGRAMADO',PRECIO_UNIT_PROG:'PROGRAMADO',IMPORTE_PROG:'PROGRAMADO',
+                 CANTIDAD_MOD:'MODIFICADO',PRECIO_UNIT_MOD:'MODIFICADO',IMPORTE_MOD:'MODIFICADO',
+                 CANTIDAD_EJEC:'EJECUTADO',PRECIO_UNIT_EJEC:'EJECUTADO',IMPORTE_EJEC:'EJECUTADO'};
+  const FASE_TXT='#1e3a8a'; // texto azul sobre los encabezados de fase
   const money=n=>(+n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
   const ec=s=>(s||'').toString().replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   /* Estado consolidado del ítem: viene calculado desde la capa Query (ESTADO_FASE). */
@@ -544,8 +585,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   const $=id=>document.getElementById(id);
   const chipsEl=$('chips'),qEl=$('q'),fTipoEl=$('fTipo'),sortEl=$('sort'),perPageEl=$('perPage');
   const vTable=$('viewTable'),vKanban=$('viewKanban'),theadEl=$('thead'),tbodyEl=$('tbody'),tfootEl=$('tfoot');
-  /* Filtros multi-select: meta/act/clasif/fuente son ARRAYS de valores marcados. */
-  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:[],act:[],clasif:[],fuente:[],fase:'<?= htmlspecialchars($fFase) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
+  /* Filtros multi-select: meta/act/clasif/fuente son ARRAYS de valores marcados.
+     ejec: '' = todos · 'si' = solo lo ejecutado (comprado) · 'no' = solo lo pendiente. */
+  const st={tipo:'<?= $fTipo ?>',q:<?= json_encode($fQ) ?>,meta:[],act:[],clasif:[],fuente:[],fase:'<?= htmlspecialchars($fFase) ?>',ejec:'<?= htmlspecialchars($fEjec) ?>',sort:'<?= htmlspecialchars($fSort) ?>',page:<?= $page ?>,perPage:<?= $perPage ?>};
   /* consultado = ya se trajo data del servidor al menos una vez. Distingue
      "todavía no consulté" (placeholder) de "consulté y no hubo resultados". */
   let mode='table', agrupar=true, prevSort='mod_desc', consultado=false, last={rows:[],total:0,summary:[]};
@@ -571,25 +613,21 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   let SEL=new Set(), aislar=false;
   function toggleSel(key){ SEL.has(key)?SEL.delete(key):SEL.add(key); }
 
-  /* Agrupar/Ordenar dinámico. groupBy='' → sin agrupar; usa el pintado de bloques. */
-  const GROUPABLE=[
-    {k:'ACTIV_OPERAT_COD', lbl:'Actividad operativa'},
-    {k:'CLASIF_COD',       lbl:'Clasificador'},
-    {k:'META',             lbl:'Meta'},
-    {k:'GENERICA',         lbl:'Genérica'},
-    {k:'FF',               lbl:'Fuente financiamiento'},
-    {k:'ESTADO_FASE',      lbl:'Fase (estado)'}];
+  /* Agrupar/Ordenar dinámico. groupBy='' → sin agrupar; usa el pintado de bloques.
+     Las etiquetas largas (para el panel de campos) vienen de LBL.groupBy. */
+  const GROUPABLE=Object.entries(LBL.groupBy).map(([k,lbl])=>({k,lbl}));
   let groupBy='ACTIV_OPERAT_COD';  // por defecto, como hoy
   /* Color estable por cualquier valor de grupo (mismo criterio que actColor). */
   function grpColor(v){let h=0;const s=(v||'').toString();for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return ACT_PAL[h%ACT_PAL.length];}
   function grpLabel(k){const g=GROUPABLE.find(x=>x.k===groupBy);return (g?g.lbl:groupBy)+' '+ec(k);}
 
   /* ═══════════════ SELECTOR DE CAMPOS ═══════════════
-     Columnas virtuales (__) + columnas reales de ExportService::HEADERS.
-     El orden de la tabla siempre respeta el orden original de HEADERS. */
-  const VCOL={__FASE:'Indicador de fase',__CMN:'Estado CMN'};
+     Columnas virtuales (__) + columnas reales de HEADERS (ambas vienen de
+     Labels, ver column_labels.php). El orden de la tabla siempre respeta el
+     orden original de HEADERS. */
+  const VCOL=LBL.virtualColumns;
   const ALLC=[...Object.keys(VCOL),...HKEYS];
-  const LBL=k=>VCOL[k]||HEADERS[k]||k;
+  const LBLTXT=k=>VCOL[k]||HEADERS[k]||k;
   const LS_COLS='siga.cols.v1';
 
   function GRUPO(k){
@@ -601,9 +639,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
-    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR'].includes(k)
+    financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
     completo  :()=>ALLC.slice()
   };
@@ -623,7 +661,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   function renderColPanel(filtro){
     const f=(filtro||'').trim().toLowerCase(), g={};
     ALLC.forEach(k=>{
-      if(f && !LBL(k).toLowerCase().includes(f) && !k.toLowerCase().includes(f))return;
+      if(f && !LBLTXT(k).toLowerCase().includes(f) && !k.toLowerCase().includes(f))return;
       (g[GRUPO(k)]=g[GRUPO(k)]||[]).push(k);
     });
     const lista=Object.keys(g).map(gr=>
@@ -635,7 +673,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
        +g[gr].map(k=>
           '<label class="flex items-center gap-2.5 py-1.5 px-1 rounded-md hover:bg-gray-50 cursor-pointer">'
          +'<input type="checkbox" class="colChk accent-primary" value="'+ec(k)+'"'+(VIS.has(k)?' checked':'')+'>'
-         +'<span class="text-[12px] text-gray-700 leading-tight">'+ec(LBL(k))+'</span></label>').join('')
+         +'<span class="text-[12px] text-gray-700 leading-tight">'+ec(LBLTXT(k))+'</span></label>').join('')
        +'</div>').join('')
       || '<p class="p-6 text-center text-xs text-gray-400">Ningún campo coincide</p>';
 
@@ -688,7 +726,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   colBadge();
   /* ═══════════════ fin selector de campos ═══════════════ */
 
-  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta.join(','),act:st.act.join(','),clasif:st.clasif.join(','),fuente:st.fuente.join(','),fase:st.fase,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
+  function params(extra){return new URLSearchParams(Object.assign({resource:'cmn',anio:ANIO,ccosto:CC,tipo:st.tipo,q:st.q,meta:st.meta.join(','),act:st.act.join(','),clasif:st.clasif.join(','),fuente:st.fuente.join(','),fase:st.fase,ejec:st.ejec,sort:st.sort,page:st.page,perPage:st.perPage},extra||{}));}
   function updateExport(){
     const cx={cols:COLS().filter(k=>!k.startsWith('__')).join(','),
               groupby:(agrupar?groupBy:''), agrupar:(agrupar?'1':'0'), _:Date.now()};
@@ -698,12 +736,11 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
   /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada O/C u O/S. */
   function badge(estado){return (estado||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{const e=p.toUpperCase();let c='bg-gray-100 text-gray-600';if(e.includes('DEVENGADO'))c='bg-primary/15 text-primary-dark';else if(e.includes('COMPROMETIDO'))c='bg-secondary/15 text-secondary-dark';else if(e.includes('CERTIFICADO'))c='bg-warning/20 text-yellow-700';else if(e.includes('PENDIENTE'))c='bg-gray-100 text-gray-500';return '<span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] '+c+'">'+ec(p)+'</span>';}).join(' ');}
-  /* Estado de línea del CMN: ANTIGUO (base) · INCLUIDO · EXCLUIDO · MODIFICADO. */
-  const CMN_EST={
-    'ANTIGUO'   :['Antiguo'   ,'bg-gray-100 text-gray-600 border-gray-300' ,'Ya venía en el cuadro base aprobado'],
-    'INCLUIDO'  :['Incluido'  ,'bg-blue-100 text-blue-800 border-blue-300' ,'Añadido después por modificación (I)'],
-    'EXCLUIDO'  :['Excluido'  ,'bg-red-100 text-red-800 border-red-300'    ,'Alguna línea del ítem fue retirada (E)'],
-    'MODIFICADO':['Modificado','bg-amber-100 text-amber-800 border-amber-300','El importe vigente cambió respecto del original']};
+  /* Estado de línea del CMN: ANTIGUO (base) · INCLUIDO · EXCLUIDO · MODIFICADO.
+     El texto y el tooltip vienen de LBL.cmnEstado; el color es diseño y se
+     queda aquí (mapeado por la misma clave). */
+  const CMN_COLOR={ANTIGUO:'bg-gray-100 text-gray-600 border-gray-300',INCLUIDO:'bg-blue-100 text-blue-800 border-blue-300',EXCLUIDO:'bg-red-100 text-red-800 border-red-300',MODIFICADO:'bg-amber-100 text-amber-800 border-amber-300'};
+  const CMN_EST=Object.fromEntries(Object.entries(LBL.cmnEstado).map(([k,v])=>[k,[v[0],CMN_COLOR[k]||'bg-gray-100 text-gray-600 border-gray-300',v[1]]]));
   function cmnBadge(d){const s=(d.ESTADO_CMN||'');if(!s)return'';
     let out=s.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const m=CMN_EST[x]||[x,'bg-gray-100 text-gray-600 border-gray-300',''];
       return '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border '+m[1]+'" title="'+m[2]+'">'+m[0]+'</span>';}).join(' ');
@@ -719,7 +756,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
      es la cantidad de ítems en esa fase, que es lo que filtra al hacer clic. */
   function renderChips(sum){
     const map={};let tc=0,tProg=0,tMod=0,tEjec=0;
-    sum.forEach(s=>{map[s.fase]={c:+s.c};tc+=+s.c;tProg+=+s.prog;tMod+=+s.monto;tEjec+=+s.ejec;});
+    sum.forEach(s=>{map[s.fase]={c:+s.c,prog:+s.prog,monto:+s.monto,ejec:+s.ejec};tc+=+s.c;tProg+=+s.prog;tMod+=+s.monto;tEjec+=+s.ejec;});
     const TOT={PROGRAMADO:tProg,MODIFICADO:tMod,EJECUTADO:tEjec};
     chipsEl.innerHTML='';
     chipsEl.appendChild(chip('Todos',tc,tMod,'bg-gray-800 text-white','ring-gray-800',st.fase==='',
@@ -730,7 +767,21 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
                :f.key==='MODIFICADO'?'Total vigente del cuadro modificado'
                :'Total efectivamente ejecutado')+'  ·  '+g.c+' ítems en esta fase (clic para filtrar)';
       chipsEl.appendChild(chip(f.label,g.c,TOT[f.key],f.chip,f.ring,st.fase===f.key,
-        ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});}
+        ()=>{st.fase=(st.fase===f.key?'':f.key);st.page=1;load();},f.dot,tip));});
+    /* Badge PENDIENTE (rojo, mayúscula): reemplaza al selector "Ejecutado/No
+       ejecutado". Pendiente = ítems sin ejecución (IMPORTE_EJEC = 0), o sea
+       todo lo que NO cae en la fase Ejecutado. El monto es la suma de lo
+       Programado en ESOS ítems (fases Programado + Modificado): como ahí
+       Ejecutado=0, para cada uno Diferencia=Programado — mismo criterio que
+       la columna DIFERENCIA. El desglose completo (Programado/Ejecutado/
+       Saldo, fila por fila) vive en la tabla del PDF, no como badge aparte.
+       Clic para filtrar/quitar filtro. */
+    const progP=map.PROGRAMADO?.prog||0, progM=map.MODIFICADO?.prog||0;
+    const pendC=(map.PROGRAMADO?.c||0)+(map.MODIFICADO?.c||0), pendMonto=progP+progM;
+    chipsEl.appendChild(chip('PENDIENTE',pendC,pendMonto,'bg-red-100 text-red-700 uppercase tracking-wide','ring-red-500',st.ejec==='no',
+      ()=>{st.ejec=(st.ejec==='no'?'':'no');st.page=1;load();},'bg-red-500',
+      'Programado en ítems sin ejecución todavía (Diferencia = Programado, ya que Ejecutado = 0) · no incluye sobregiros de otros ítems · clic para filtrar'));
+  }
 
   function chip(label,count,monto,cls,ring,active,onclick,dot,tip){const b=document.createElement('button');if(tip)b.title=tip;b.className='px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 transition-all '+cls+(active?(' ring-2 ring-offset-1 '+ring):' opacity-90 hover:opacity-100');b.innerHTML=(dot?'<span class="w-2 h-2 rounded-full '+dot+'"></span>':'')+'<span>'+label+'</span><span class="opacity-60">·</span><span>'+count+'</span><span class="opacity-60">S/ '+money(monto)+'</span>';b.onclick=onclick;return b;}
 
@@ -841,10 +892,13 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
     theadEl.innerHTML='<th class="px-1 py-2 w-8 text-center">'
         +'<input type="checkbox" id="selAll" class="accent-primary align-middle" title="Seleccionar todo lo visible"></th>'
-      +cols.map(k=>
-        k==='__FASE' ? '<th class="px-2 py-2 w-6"></th>'
-      : k==='__CMN'  ? '<th class="px-2 py-2 font-semibold text-left">ESTADO CMN</th>'
-      : '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'">'+ec(HEADERS[k])+'</th>').join('');
+      +cols.map(k=>{
+        const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null;
+        const st=fh?' style="background:'+fh[0]+';color:'+FASE_TXT+'"':'';
+        if(k==='__FASE') return '<th class="px-2 py-2 w-6"'+st+'></th>';
+        if(k==='__CMN')  return '<th class="px-2 py-2 font-semibold text-left"'+st+'>ESTADO CMN</th>';
+        return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';
+      }).join('');
     if(!vista.length){tbodyEl.innerHTML='<tr><td colspan="'+nCols+'" class="px-3 py-6 text-center text-gray-400">'+(aislar&&SEL.size?'No hay filas seleccionadas en esta página':'Sin resultados')+'</td></tr>';tfootEl.innerHTML='';selBar();return;}
 
     const codBien=d=>[d.GRUPO_BIEN,d.CLASE_BIEN,d.FAMILIA_BIEN,d.ITEM_BIEN].map(x=>(x||'').toString()).join('');
@@ -870,14 +924,29 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       if(sel) style+='background:#dbeafe;box-shadow:inset 5px 0 0 #2563eb;';
       const f=FMAP[faseKey(d)];
       const cells=cols.map((k,ci)=>{
+        const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null, bgTint=fh?'background:'+fh[1]+';':'';
         if(k==='__FASE') return '<td class="py-1 text-center px-2" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
         if(k==='__CMN')  return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
         if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
+        if(k==='ESTADO_EJEC'){
+          /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
+             Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
+          const ej=(+d.IMPORTE_EJEC)>0.005;
+          return '<td class="px-2 py-1"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
+               +(ej?'bg-primary/15 text-primary-dark':'bg-red-100 text-red-700')+'">'+(ej?'Ejecutado':'Pendiente')+'</span></td>';
+        }
+        if(k==='IMPORTE_PROG'){
+          /* Sin importe programado pero con modificado/ejecutado: se resalta en
+             rojo como aviso de sobregiro, pero el importe mostrado es SIEMPRE
+             su valor real (0.00) — nunca un número negativo inventado. */
+          const sinProg=(+d.IMPORTE_PROG)<=0.005 && ((+d.IMPORTE_MOD)>0.005 || (+d.IMPORTE_EJEC)>0.005);
+          return '<td class="px-2 py-1 text-right tabular-nums'+(sinProg?' font-bold':'')+'" style="'+bgTint+(sinProg?'color:'+DIF_ROJO:'')+'" title="'+(sinProg?'SOBREGIRADO: sin importe programado':'')+'">'+money(+d.IMPORTE_PROG)+'</td>';
+        }
         if(k==='DIFERENCIA') return '<td class="px-2 py-1 text-right tabular-nums font-semibold underline decoration-2 underline-offset-2" style="color:'+((+d[k])<-0.005?DIF_ROJO:DIF_AMBAR)+'">'+money(d[k])+'</td>';
         return NUM.has(k)
-          ? '<td class="px-2 py-1 text-right tabular-nums">'+money(d[k])+'</td>'
-          : '<td class="px-2 py-1">'+ec(d[k])+'</td>';
+          ? '<td class="px-2 py-1 text-right tabular-nums" style="'+bgTint+'">'+money(d[k])+'</td>'
+          : '<td class="px-2 py-1" style="'+bgTint+'">'+ec(d[k])+'</td>';
       }).join('');
       return '<tr class="itemrow trow'+(dentro||sel?'':' bg-white hover:bg-gray-50')+'" style="'+style+'" data-idx="'+idx+'" title="Doble clic para ver el expediente">'+cellMark(d,dentro)+cells+'</tr>';
     };
@@ -888,7 +957,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       const keys=Object.keys(g).sort();
       keys.forEach((k,gi)=>{
         const items=g[k].sort((a,b)=>codBien(a)<codBien(b)?-1:codBien(a)>codBien(b)?1:0);
-        const c=grpColor(k), cerrado=colapsados.has(k);
+        // Cuando se agrupa por fase, usar la paleta amarillo/naranja/verde de FASES
+        // en vez del color por hash, para que el color del bloque coincida con la etapa.
+        const c=(groupBy==='ESTADO_FASE'&&FASE_HEX[k])?FASE_HEX[k]:grpColor(k), cerrado=colapsados.has(k);
         const sP=items.reduce((s,x)=>s+ +x.IMPORTE_PROG,0),sM=items.reduce((s,x)=>s+ +x.IMPORTE_MOD,0),
               sE=items.reduce((s,x)=>s+ +x.IMPORTE_EJEC,0),sD=items.reduce((s,x)=>s+ +x.DIFERENCIA,0),
               sDev=items.reduce((s,x)=>s+ +x.DEVENGADO,0),sSaldo=items.reduce((s,x)=>s+ +x.SALDO_DEVENGAR,0);
@@ -911,9 +982,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
             +'<span class="text-[12px] font-bold truncate uppercase tracking-wide">'+ec(gname)+'</span>'
             +'<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style="background:rgba(255,255,255,.9);color:'+c[0]+'">'+items.length+' ítems</span>'
             +'<div class="ml-auto flex items-center gap-3 shrink-0">'
-              +'<span class="text-[10px] tabular-nums hidden sm:inline"><span class="opacity-70">Mod</span> <b>'+money(sM)+'</b></span>'
-              +'<span class="text-[10px] tabular-nums"><span class="opacity-70">Ejec</span> <b>'+money(sE)+'</b></span>'
-              +'<span class="text-[10px] tabular-nums hidden md:inline"><span class="opacity-70">Dev</span> <b>'+money(sDev)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums hidden sm:inline px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Mod</span> <b>'+money(sM)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Ejec</span> <b>'+money(sE)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums hidden md:inline px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Dev</span> <b>'+money(sDev)+'</b></span>'
               +'<div class="w-20 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,255,255,.3)"><div class="h-full rounded-full bg-white" style="width:'+pct+'%"></div></div>'
               +'<span class="text-[11px] font-black tabular-nums w-12 text-right">'+pct.toFixed(1)+'%</span>'
             +'</div>'
@@ -941,7 +1012,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
   function renderKanban(rows){vKanban.innerHTML='';const vis=st.fase?FASES.filter(f=>f.key===st.fase):FASES;
     vis.forEach(f=>{const g=[];rows.forEach((d,i)=>{if(faseKey(d)===f.key)g.push({d,i});});const monto=g.reduce((s,x)=>s+ +x.d.IMPORTE_MOD,0);
-      const col=document.createElement('div');col.className='flex-shrink-0 w-72 bg-gray-100/70 rounded-xl flex flex-col max-h-[calc(100vh-360px)]';
+      const col=document.createElement('div');col.className='min-w-0 bg-gray-100/70 rounded-xl flex flex-col max-h-[calc(100vh-280px)]';
       col.innerHTML='<div class="p-3 border-b border-gray-200"><div class="flex items-center gap-2"><span class="w-2.5 h-2.5 rounded-full '+f.dot+'"></span><span class="font-semibold text-sm text-gray-700">'+f.label+'</span><span class="ml-auto text-xs bg-white px-2 py-0.5 rounded-full text-gray-500">'+g.length+'</span></div><div class="text-[11px] text-gray-500 mt-1">S/ '+money(monto)+' (página)</div></div>';
       const body=document.createElement('div');body.className='p-2 space-y-2 overflow-y-auto';
       body.innerHTML=g.length?g.map(x=>card(x.d,f,x.i)).join(''):'<p class="text-center text-xs text-gray-400 py-6">Sin ítems</p>';
@@ -1486,19 +1557,20 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   sw.querySelectorAll('button').forEach(b=>b.addEventListener('click',()=>setMode(b.dataset.mode)));
 
   /* controles */
-  let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},350);});
+  let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},600);});
   fTipoEl.addEventListener('change',()=>{st.tipo=fTipoEl.value;st.page=1;load();});
-  /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════ */
-  const MSF_LBL={meta:{all:'Todas las metas',pre:'meta'},act:{all:'Toda actividad',pre:'act'},clasif:{all:'Todo clasificador',pre:'clasif'},fuente:{all:'Toda fuente',pre:'fuente'}};
+  /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════
+     Los textos "Todas las metas / Toda actividad / …" vienen de LBL.msf,
+     así se editan junto con el resto en column_labels.php. */
   function msfSync(box){
     const key=box.dataset.msf;
     const checks=[...box.querySelectorAll('.msf-opt input:checked')];
     st[key]=checks.map(c=>c.value);
     const lbl=box.querySelector('.msf-lbl');
-    const cfg=MSF_LBL[key];
-    if(!checks.length) lbl.textContent=cfg.all;
+    const cfg=LBL.msf[key];
+    if(!checks.length) lbl.textContent=cfg.todos;
     else if(checks.length===1) lbl.textContent=(key==='meta'?'Meta ':'')+checks[0].value;
-    else lbl.textContent=checks.length+' '+cfg.pre+'s';
+    else lbl.textContent=checks.length+' '+cfg.singular+'s';
     box.querySelector('.msf-btn').classList.toggle('msf-on',checks.length>0);
   }
   document.querySelectorAll('.msf').forEach(box=>{
@@ -1559,6 +1631,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     SIGA.accion('Buscar ítem','fa-magnifying-glass',()=>{qEl.focus();qEl.select();},'Enfoca el buscador de ítems');
     SIGA.accion('Expandir todas las actividades','fa-up-right-and-down-left-from-center',()=>$('gExpand').click(),'Abre todos los bloques del agrupado');
     SIGA.accion('Contraer todas las actividades','fa-down-left-and-up-right-to-center',()=>$('gCollapse').click(),'Cierra todos los bloques del agrupado');
+    SIGA.accion('Solo ejecutados (comprado)','fa-check-double',()=>{st.fase=(st.fase==='EJECUTADO'?'':'EJECUTADO');st.page=1;load();},'Filtra solo lo que ya se compró');
+    SIGA.accion('Solo pendientes (no comprado)','fa-hourglass-half',()=>{st.ejec=(st.ejec==='no'?'':'no');st.page=1;load();},'Filtra solo lo que aún no se compra');
   }
 
   // set selects a estado inicial

@@ -13,11 +13,16 @@
  * CONFIGURACIÓN: servidor, base, SEC_EJEC y año por defecto salen del .env a
  * través de config.php. No hay credenciales escritas en este archivo.
  * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
+ *
+ * LABELS: todos los nombres de columnas, fases, agrupado, orden y estado CMN
+ * viven en column_labels.php (clase Labels). Para renombrar cualquier texto
+ * de la pantalla, el Excel o el PDF, edita solo ese archivo.
  */
 require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/CmnQuery.php';
 require_once __DIR__ . '/ExportService.php';
+require_once __DIR__ . '/column_labels.php';
 
 /* ---- SEGURIDAD: sin sesión no se entra (protege vista, endpoints y export) ---- */
 $auth = new Auth();
@@ -175,10 +180,7 @@ if ($action === 'data') {
 /* ---- RENDER SHELL ---- */
 $centros   = $q->centros($anioProg,$anioEjec,SEC_EJEC);
 $opts      = $q->opciones($anioProg,$anioEjec,SEC_EJEC,$ccosto);
-$H         = ExportService::HEADERS;
-$NUM       = array_keys(array_flip(ExportService::NUM));
-$jsonH     = json_encode($H, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
-$jsonNum   = json_encode($NUM, JSON_HEX_TAG);
+$jsonLbl   = Labels::toJs();  // única fuente de verdad: columnas, fases, agrupado, orden, estado CMN
 $jsonCent  = json_encode($centros, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
 $ccostoNombre='';
 foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  ·  '.$c['nombre'];break;} }
@@ -202,7 +204,7 @@ $ACCIONES  = '
 include __DIR__ . '/partials/head.php';
 ?>
 <body class="bg-gray-50 text-gray-800">
-<div class="flex min-h-screen">
+<div class="flex min-h-screen siga-shell">
   <?php include __DIR__ . '/partials/sidebar.php'; ?>
 
   <main class="flex-1 min-w-0 p-3 sm:p-4 flex flex-col">
@@ -239,7 +241,7 @@ include __DIR__ . '/partials/head.php';
         <!-- Filtros multi-select tipo Excel (checkboxes). El botón muestra el conteo. -->
         <div class="msf relative" data-msf="meta">
           <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Todas las metas</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['meta']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-56 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -253,7 +255,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="act">
           <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Toda actividad</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['act']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-64 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -267,7 +269,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="clasif">
           <button type="button" class="msf-btn input-bordered w-36 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Todo clasificador</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['clasif']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -281,7 +283,7 @@ include __DIR__ . '/partials/head.php';
         </div>
         <div class="msf relative" data-msf="fuente">
           <button type="button" class="msf-btn input-bordered w-32 text-left flex items-center justify-between gap-1">
-            <span class="msf-lbl truncate">Toda fuente</span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
+            <span class="msf-lbl truncate"><?= htmlspecialchars(Labels::MSF['fuente']['todos']) ?></span><i class="fa-solid fa-chevron-down text-[10px] text-gray-400"></i>
           </button>
           <div class="msf-pop hidden absolute z-40 mt-1 w-72 max-h-72 overflow-auto bg-white rounded-lg border border-gray-200 shadow-xl p-1">
             <div class="p-1.5 sticky top-0 bg-white border-b border-gray-100">
@@ -294,17 +296,17 @@ include __DIR__ . '/partials/head.php';
           </div>
         </div>
         <select id="sort" class="input-bordered w-44">
-          <option value="mod_desc">Mayor importe</option><option value="mod_asc">Menor importe</option><option value="item_asc">Nombre A-Z</option><option value="act_item">Actividad + código ítem</option><option value="clasif">Clasificador + ítem</option></select>
+          <?php foreach (Labels::SORT_OPTIONS as $val => $txt): ?>
+            <option value="<?= htmlspecialchars($val) ?>"><?= htmlspecialchars($txt) ?></option>
+          <?php endforeach; ?>
+        </select>
         <label class="inline-flex items-center gap-2 px-3 py-2 text-sm rounded-lg border border-gray-300 cursor-pointer select-none whitespace-nowrap">
           <input type="checkbox" id="agrupar" class="accent-primary" checked> Agrupar
         </label>
         <select id="groupBy" class="input-bordered w-44 py-2" title="Agrupar por…">
-          <option value="ACTIV_OPERAT_COD">por Actividad</option>
-          <option value="CLASIF_COD">por Clasificador</option>
-          <option value="META">por Meta</option>
-          <option value="GENERICA">por Genérica</option>
-          <option value="FF">por Fuente Financ.</option>
-          <option value="ESTADO_FASE">por Fase</option>
+          <?php foreach (Labels::GROUP_BY_SELECT as $val => $txt): ?>
+            <option value="<?= htmlspecialchars($val) ?>"><?= htmlspecialchars($txt) ?></option>
+          <?php endforeach; ?>
         </select>
         <button id="gExpand" type="button" title="Expandir todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-plus"></i></button>
         <button id="gCollapse" type="button" title="Contraer todo" class="px-2.5 py-2 text-sm rounded-lg border border-gray-300 hover:bg-gray-50"><i class="fa-solid fa-minus"></i></button>
@@ -334,7 +336,7 @@ include __DIR__ . '/partials/head.php';
     </div>
 
     <div id="viewTable" class="bg-white rounded-xl border border-gray-200 overflow-auto flex-1 min-h-[280px]" style="-webkit-overflow-scrolling:touch">
-      <table class="min-w-full text-xs whitespace-nowrap">
+      <table class="min-w-full text-xs whitespace-nowrap" style="table-layout:fixed">
         <thead class="sticky top-0 z-10"><tr id="thead" class="bg-primary text-white"></tr></thead>
         <tbody id="tbody"></tbody>
         <tfoot id="tfoot" class="sticky bottom-0"></tfoot>
@@ -459,6 +461,16 @@ include __DIR__ . '/partials/head.php';
 </style>
 
 <style>
+  /* ── Scroll interno (≥sm): la barra de herramientas y la cabecera de la tabla
+       quedan fijas; solo el cuerpo se desplaza, manteniendo la cabecera arriba
+       (cuadro morado/primary) y la barra horizontal siempre a la vista. ── */
+  @media (min-width:640px){
+    .siga-shell{height:100vh;overflow:hidden}
+    .siga-shell main{min-height:0}
+    #viewTable{min-height:0}
+  }
+  /* Mejor legibilidad de los datos sobre la barra de grupo de color (verde, etc.) */
+  tr.ghead{text-shadow:0 1px 2px rgba(0,0,0,.28)}
   /* ── Filtros multi-select tipo Excel ── */
   .msf-btn{cursor:pointer}
   .msf-btn.msf-on{border-color:var(--primary,#059669)!important;color:var(--primary,#059669);font-weight:600}
@@ -506,7 +518,10 @@ include __DIR__ . '/partials/head.php';
   body.fsOn{overflow:hidden}
   tr.itemrow{transition:filter .12s ease}
   /* Cabeceras a doble línea: en vez de una fila larguísima, el texto se envuelve. */
-  #thead th{white-space:normal;line-height:1.15;vertical-align:bottom;min-width:64px;max-width:150px}
+  #thead th{white-space:normal;line-height:1.15;vertical-align:bottom;min-width:64px;overflow:hidden;word-break:break-word}
+  /* Celdas de texto: una sola línea truncada con "…"; el valor completo se ve
+     al pasar el mouse (title=""), sin necesidad de JS ni de ensanchar la fila. */
+  #tbody td.cellTrunc{overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
   #thead th.w-6{min-width:0}
   tr.itemrow:hover{filter:brightness(.965)}
   tr.ghead:hover{filter:brightness(1.06)}
@@ -542,18 +557,23 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
 /* ===== Datos paginados + Tabla/Kanban ===== */
 (function(){
-  const HEADERS=<?= $jsonH ?>, NUM=new Set(<?= $jsonNum ?>), HKEYS=Object.keys(HEADERS);
+  /* Única fuente de verdad de nombres: LBL (viene de Labels::toJs() en PHP,
+     definido en column_labels.php). Para renombrar cualquier columna, fase,
+     texto de "Ordenar por"/"Agrupar por" o estado CMN: edita SOLO ese archivo,
+     nunca este bloque. */
+  const LBL=<?= $jsonLbl ?>;
+  const HEADERS=LBL.columns, NUM=new Set(LBL.numericColumns), HKEYS=Object.keys(HEADERS);
   const ANIO='<?= $anioProg ?>', CC='<?= htmlspecialchars($ccosto ?? '') ?>';
-  /* Los 3 estados del gasto planificado, con la paleta pedida:
-     Programado=amarillo · Modificado=naranja · Ejecutado=verde. El estado de
-     cada fila llega en d.ESTADO_FASE. */
+  /* Los 3 estados del gasto planificado. El texto viene de LBL.fases; el
+     color/paleta (amarillo/naranja/verde) es una decisión de diseño y se
+     queda aquí. El estado de cada fila llega en d.ESTADO_FASE. */
   const FASES=[
-    {key:'PROGRAMADO',label:'Programado',dot:'bg-yellow-400',col:'border-yellow-400',chip:'bg-yellow-100 text-yellow-700',ring:'ring-yellow-400',tint:'bg-yellow-50'},
-    {key:'MODIFICADO',label:'Modificado',dot:'bg-orange-500',col:'border-orange-500',chip:'bg-orange-100 text-orange-700',ring:'ring-orange-500',tint:'bg-orange-50'},
-    {key:'EJECUTADO', label:'Ejecutado', dot:'bg-emerald-500',col:'border-emerald-500',chip:'bg-emerald-100 text-emerald-700',ring:'ring-emerald-500',tint:'bg-emerald-50'}];
+    {key:'PROGRAMADO',label:LBL.fases.PROGRAMADO,dot:'bg-yellow-400',col:'border-yellow-400',chip:'bg-yellow-100 text-yellow-700',ring:'ring-yellow-400',tint:'bg-yellow-50'},
+    {key:'MODIFICADO',label:LBL.fases.MODIFICADO,dot:'bg-orange-500',col:'border-orange-500',chip:'bg-orange-100 text-orange-700',ring:'ring-orange-500',tint:'bg-orange-50'},
+    {key:'EJECUTADO', label:LBL.fases.EJECUTADO, dot:'bg-emerald-500',col:'border-emerald-500',chip:'bg-emerald-100 text-emerald-700',ring:'ring-emerald-500',tint:'bg-emerald-50'}];
   const FMAP=Object.fromEntries(FASES.map(f=>[f.key,f]));
   // Colores hex de las mismas 3 etapas, para pintar cabeceras de grupo cuando se agrupa por fase.
-  const FASE_HEX={PROGRAMADO:['#eab308','#fefce8'],MODIFICADO:['#f97316','#fff7ed'],EJECUTADO:['#10b981','#ecfdf5']};
+  const FASE_HEX={PROGRAMADO:['#FFFF00','#fefce8'],MODIFICADO:['#FFC000','#fff7ed'],EJECUTADO:['#47D359','#ecfdf5']};
   /* Qué columna pertenece a qué etapa, para pintar cabecera (color fuerte) y
      celdas de dato (tinte claro) exactamente igual que en el Excel. */
   const COLFASE={CANTIDAD_PROG:'PROGRAMADO',PRECIO_UNIT_PROG:'PROGRAMADO',IMPORTE_PROG:'PROGRAMADO',
@@ -596,25 +616,25 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   let SEL=new Set(), aislar=false;
   function toggleSel(key){ SEL.has(key)?SEL.delete(key):SEL.add(key); }
 
-  /* Agrupar/Ordenar dinámico. groupBy='' → sin agrupar; usa el pintado de bloques. */
-  const GROUPABLE=[
-    {k:'ACTIV_OPERAT_COD', lbl:'Actividad operativa'},
-    {k:'CLASIF_COD',       lbl:'Clasificador'},
-    {k:'META',             lbl:'Meta'},
-    {k:'GENERICA',         lbl:'Genérica'},
-    {k:'FF',               lbl:'Fuente financiamiento'},
-    {k:'ESTADO_FASE',      lbl:'Fase (estado)'}];
+  /* Agrupar/Ordenar dinámico. groupBy='' → sin agrupar; usa el pintado de bloques.
+     Las etiquetas largas (para el panel de campos) vienen de LBL.groupBy. */
+  const GROUPABLE=Object.entries(LBL.groupBy).map(([k,lbl])=>({k,lbl}));
   let groupBy='ACTIV_OPERAT_COD';  // por defecto, como hoy
   /* Color estable por cualquier valor de grupo (mismo criterio que actColor). */
   function grpColor(v){let h=0;const s=(v||'').toString();for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return ACT_PAL[h%ACT_PAL.length];}
   function grpLabel(k){const g=GROUPABLE.find(x=>x.k===groupBy);return (g?g.lbl:groupBy)+' '+ec(k);}
 
   /* ═══════════════ SELECTOR DE CAMPOS ═══════════════
-     Columnas virtuales (__) + columnas reales de ExportService::HEADERS.
-     El orden de la tabla siempre respeta el orden original de HEADERS. */
-  const VCOL={__FASE:'Indicador de fase',__CMN:'Estado CMN'};
+     Columnas virtuales (__) + columnas reales de HEADERS (ambas vienen de
+     Labels, ver column_labels.php). El orden de la tabla siempre respeta el
+     orden original de HEADERS. */
+  const VCOL=LBL.virtualColumns;
   const ALLC=[...Object.keys(VCOL),...HKEYS];
-  const LBL=k=>VCOL[k]||HEADERS[k]||k;
+  const LBLTXT=k=>VCOL[k]||HEADERS[k]||k;
+  /* Ancho de columna: viene de LBL.widths (column_labels.php → Labels::WIDTHS).
+     Para cambiar el ancho de una columna en pantalla, edita ese archivo, no
+     este bloque. 90px es el respaldo si alguna columna no tuviera ancho definido. */
+  const colWidth=k=>(LBL.widths&&LBL.widths[k])||90;
   const LS_COLS='siga.cols.v1';
 
   function GRUPO(k){
@@ -648,7 +668,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   function renderColPanel(filtro){
     const f=(filtro||'').trim().toLowerCase(), g={};
     ALLC.forEach(k=>{
-      if(f && !LBL(k).toLowerCase().includes(f) && !k.toLowerCase().includes(f))return;
+      if(f && !LBLTXT(k).toLowerCase().includes(f) && !k.toLowerCase().includes(f))return;
       (g[GRUPO(k)]=g[GRUPO(k)]||[]).push(k);
     });
     const lista=Object.keys(g).map(gr=>
@@ -660,7 +680,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
        +g[gr].map(k=>
           '<label class="flex items-center gap-2.5 py-1.5 px-1 rounded-md hover:bg-gray-50 cursor-pointer">'
          +'<input type="checkbox" class="colChk accent-primary" value="'+ec(k)+'"'+(VIS.has(k)?' checked':'')+'>'
-         +'<span class="text-[12px] text-gray-700 leading-tight">'+ec(LBL(k))+'</span></label>').join('')
+         +'<span class="text-[12px] text-gray-700 leading-tight">'+ec(LBLTXT(k))+'</span></label>').join('')
        +'</div>').join('')
       || '<p class="p-6 text-center text-xs text-gray-400">Ningún campo coincide</p>';
 
@@ -723,12 +743,11 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
   /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada O/C u O/S. */
   function badge(estado){return (estado||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{const e=p.toUpperCase();let c='bg-gray-100 text-gray-600';if(e.includes('DEVENGADO'))c='bg-primary/15 text-primary-dark';else if(e.includes('COMPROMETIDO'))c='bg-secondary/15 text-secondary-dark';else if(e.includes('CERTIFICADO'))c='bg-warning/20 text-yellow-700';else if(e.includes('PENDIENTE'))c='bg-gray-100 text-gray-500';return '<span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] '+c+'">'+ec(p)+'</span>';}).join(' ');}
-  /* Estado de línea del CMN: ANTIGUO (base) · INCLUIDO · EXCLUIDO · MODIFICADO. */
-  const CMN_EST={
-    'ANTIGUO'   :['Antiguo'   ,'bg-gray-100 text-gray-600 border-gray-300' ,'Ya venía en el cuadro base aprobado'],
-    'INCLUIDO'  :['Incluido'  ,'bg-blue-100 text-blue-800 border-blue-300' ,'Añadido después por modificación (I)'],
-    'EXCLUIDO'  :['Excluido'  ,'bg-red-100 text-red-800 border-red-300'    ,'Alguna línea del ítem fue retirada (E)'],
-    'MODIFICADO':['Modificado','bg-amber-100 text-amber-800 border-amber-300','El importe vigente cambió respecto del original']};
+  /* Estado de línea del CMN: ANTIGUO (base) · INCLUIDO · EXCLUIDO · MODIFICADO.
+     El texto y el tooltip vienen de LBL.cmnEstado; el color es diseño y se
+     queda aquí (mapeado por la misma clave). */
+  const CMN_COLOR={ANTIGUO:'bg-gray-100 text-gray-600 border-gray-300',INCLUIDO:'bg-blue-100 text-blue-800 border-blue-300',EXCLUIDO:'bg-red-100 text-red-800 border-red-300',MODIFICADO:'bg-amber-100 text-amber-800 border-amber-300'};
+  const CMN_EST=Object.fromEntries(Object.entries(LBL.cmnEstado).map(([k,v])=>[k,[v[0],CMN_COLOR[k]||'bg-gray-100 text-gray-600 border-gray-300',v[1]]]));
   function cmnBadge(d){const s=(d.ESTADO_CMN||'');if(!s)return'';
     let out=s.split(',').map(x=>x.trim()).filter(Boolean).map(x=>{const m=CMN_EST[x]||[x,'bg-gray-100 text-gray-600 border-gray-300',''];
       return '<span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold border '+m[1]+'" title="'+m[2]+'">'+m[0]+'</span>';}).join(' ');
@@ -882,8 +901,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         +'<input type="checkbox" id="selAll" class="accent-primary align-middle" title="Seleccionar todo lo visible"></th>'
       +cols.map(k=>{
         const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null;
-        const st=fh?' style="background:'+fh[0]+';color:'+FASE_TXT+'"':'';
-        if(k==='__FASE') return '<th class="px-2 py-2 w-6"'+st+'></th>';
+        const w='width:'+colWidth(k)+'px;min-width:'+colWidth(k)+'px;max-width:'+colWidth(k)+'px;';
+        const st=' style="'+w+(fh?'background:'+fh[0]+';color:'+FASE_TXT+';':'')+'"';
+        if(k==='__FASE') return '<th class="px-2 py-2"'+st+'></th>';
         if(k==='__CMN')  return '<th class="px-2 py-2 font-semibold text-left"'+st+'>ESTADO CMN</th>';
         return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';
       }).join('');
@@ -913,15 +933,20 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       const f=FMAP[faseKey(d)];
       const cells=cols.map((k,ci)=>{
         const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null, bgTint=fh?'background:'+fh[1]+';':'';
-        if(k==='__FASE') return '<td class="py-1 text-center px-2" title="'+f.label+'">'
+        const wCss='width:'+colWidth(k)+'px;max-width:'+colWidth(k)+'px;';
+        /* wTrunc: además del ancho fijo, corta el contenido con "…" en vez de
+           dejarlo desbordar sobre la columna vecina; el valor completo queda
+           en el atributo title, visible al pasar el mouse (sin JS extra). */
+        const wTrunc=wCss+'overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
+        if(k==='__FASE') return '<td class="py-1 text-center px-2" style="'+wCss+'" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
-        if(k==='__CMN')  return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
-        if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
+        if(k==='__CMN')  return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
+        if(k==='ESTADO_ORDEN') return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><div class="flex flex-wrap gap-1">'+badge(d[k])+'</div></td>';
         if(k==='ESTADO_EJEC'){
           /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
              Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
           const ej=(+d.IMPORTE_EJEC)>0.005;
-          return '<td class="px-2 py-1"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
+          return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
                +(ej?'bg-primary/15 text-primary-dark':'bg-red-100 text-red-700')+'">'+(ej?'Ejecutado':'Pendiente')+'</span></td>';
         }
         if(k==='IMPORTE_PROG'){
@@ -929,12 +954,30 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
              rojo como aviso de sobregiro, pero el importe mostrado es SIEMPRE
              su valor real (0.00) — nunca un número negativo inventado. */
           const sinProg=(+d.IMPORTE_PROG)<=0.005 && ((+d.IMPORTE_MOD)>0.005 || (+d.IMPORTE_EJEC)>0.005);
-          return '<td class="px-2 py-1 text-right tabular-nums'+(sinProg?' font-bold':'')+'" style="'+bgTint+(sinProg?'color:'+DIF_ROJO:'')+'" title="'+(sinProg?'SOBREGIRADO: sin importe programado':'')+'">'+money(+d.IMPORTE_PROG)+'</td>';
+          return '<td class="px-2 py-1 text-right tabular-nums'+(sinProg?' font-bold':'')+'" style="'+wTrunc+bgTint+(sinProg?'color:'+DIF_ROJO:'')+'" title="'+(sinProg?'SOBREGIRADO: sin importe programado':'')+'">'+money(+d.IMPORTE_PROG)+'</td>';
         }
-        if(k==='DIFERENCIA') return '<td class="px-2 py-1 text-right tabular-nums font-semibold underline decoration-2 underline-offset-2" style="color:'+((+d[k])<-0.005?DIF_ROJO:DIF_AMBAR)+'">'+money(d[k])+'</td>';
+        if(k==='DIFERENCIA') return '<td class="px-2 py-1 text-right tabular-nums font-semibold underline decoration-2 underline-offset-2" style="'+wTrunc+'color:'+((+d[k])<-0.005?DIF_ROJO:DIF_AMBAR)+'">'+money(d[k])+'</td>';
+        if(k==='ESTADO_FASE'){
+          /* La celda de datos mostraba el valor crudo del SQL (PROGRAMADO/
+             MODIFICADO/EJECUTADO) sin pasar por LBL.fases — por eso los chips
+             y el Kanban ya decían "Certificado/Compromiso/Devengado" pero la
+             tabla seguía en el texto viejo. Aquí se traduce igual que en todo
+             lo demás. */
+          const txt=(FMAP[d[k]]?FMAP[d[k]].label:d[k])||'';
+          return '<td class="px-2 py-1" style="'+wTrunc+bgTint+'" title="'+ec(txt)+'">'+ec(txt)+'</td>';
+        }
+        if(k==='ESTADO_CMN'){
+          /* Texto crudo con varios estados separados por coma, p.ej.
+             "PROGRAMADO, MODIFICADO". En vez de truncar con "…" (se perdía
+             información), se parte por coma y cada estado va en su propia
+             línea: la celda crece de alto (white-space:normal) en lugar de
+             recortar el texto a lo ancho. */
+          const partes=(d[k]||'').split(',').map(x=>x.trim()).filter(Boolean);
+          return '<td class="px-2 py-1" style="'+wCss+'white-space:normal;line-height:1.35;overflow:hidden">'+partes.map(ec).join('<br>')+'</td>';
+        }
         return NUM.has(k)
-          ? '<td class="px-2 py-1 text-right tabular-nums" style="'+bgTint+'">'+money(d[k])+'</td>'
-          : '<td class="px-2 py-1" style="'+bgTint+'">'+ec(d[k])+'</td>';
+          ? '<td class="px-2 py-1 text-right tabular-nums" style="'+wTrunc+bgTint+'">'+money(d[k])+'</td>'
+          : '<td class="px-2 py-1" style="'+wTrunc+bgTint+'" title="'+ec(d[k])+'">'+ec(d[k])+'</td>';
       }).join('');
       return '<tr class="itemrow trow'+(dentro||sel?'':' bg-white hover:bg-gray-50')+'" style="'+style+'" data-idx="'+idx+'" title="Doble clic para ver el expediente">'+cellMark(d,dentro)+cells+'</tr>';
     };
@@ -970,9 +1013,9 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
             +'<span class="text-[12px] font-bold truncate uppercase tracking-wide">'+ec(gname)+'</span>'
             +'<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style="background:rgba(255,255,255,.9);color:'+c[0]+'">'+items.length+' ítems</span>'
             +'<div class="ml-auto flex items-center gap-3 shrink-0">'
-              +'<span class="text-[10px] tabular-nums hidden sm:inline"><span class="opacity-70">Mod</span> <b>'+money(sM)+'</b></span>'
-              +'<span class="text-[10px] tabular-nums"><span class="opacity-70">Ejec</span> <b>'+money(sE)+'</b></span>'
-              +'<span class="text-[10px] tabular-nums hidden md:inline"><span class="opacity-70">Dev</span> <b>'+money(sDev)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums hidden sm:inline px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Mod</span> <b>'+money(sM)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Ejec</span> <b>'+money(sE)+'</b></span>'
+              +'<span class="text-[10px] tabular-nums hidden md:inline px-1.5 py-0.5 rounded" style="background:rgba(0,0,0,.22)"><span class="opacity-80">Dev</span> <b>'+money(sDev)+'</b></span>'
               +'<div class="w-20 h-1.5 rounded-full overflow-hidden" style="background:rgba(255,255,255,.3)"><div class="h-full rounded-full bg-white" style="width:'+pct+'%"></div></div>'
               +'<span class="text-[11px] font-black tabular-nums w-12 text-right">'+pct.toFixed(1)+'%</span>'
             +'</div>'
@@ -1547,17 +1590,18 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* controles */
   let deb;qEl.addEventListener('input',()=>{clearTimeout(deb);deb=setTimeout(()=>{st.q=qEl.value;st.page=1;load();},600);});
   fTipoEl.addEventListener('change',()=>{st.tipo=fTipoEl.value;st.page=1;load();});
-  /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════ */
-  const MSF_LBL={meta:{all:'Todas las metas',pre:'meta'},act:{all:'Toda actividad',pre:'act'},clasif:{all:'Todo clasificador',pre:'clasif'},fuente:{all:'Toda fuente',pre:'fuente'}};
+  /* ═══════════ FILTROS MULTI-SELECT TIPO EXCEL ═══════════
+     Los textos "Todas las metas / Toda actividad / …" vienen de LBL.msf,
+     así se editan junto con el resto en column_labels.php. */
   function msfSync(box){
     const key=box.dataset.msf;
     const checks=[...box.querySelectorAll('.msf-opt input:checked')];
     st[key]=checks.map(c=>c.value);
     const lbl=box.querySelector('.msf-lbl');
-    const cfg=MSF_LBL[key];
-    if(!checks.length) lbl.textContent=cfg.all;
+    const cfg=LBL.msf[key];
+    if(!checks.length) lbl.textContent=cfg.todos;
     else if(checks.length===1) lbl.textContent=(key==='meta'?'Meta ':'')+checks[0].value;
-    else lbl.textContent=checks.length+' '+cfg.pre+'s';
+    else lbl.textContent=checks.length+' '+cfg.singular+'s';
     box.querySelector('.msf-btn').classList.toggle('msf-on',checks.length>0);
   }
   document.querySelectorAll('.msf').forEach(box=>{

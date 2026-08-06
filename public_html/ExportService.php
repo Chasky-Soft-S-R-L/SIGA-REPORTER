@@ -9,68 +9,30 @@
  * La salida replica la vista web: columna ESTADO CMN, bloques por ACTIVIDAD
  * OPERATIVA con color, ítems ordenados por código de bien, Sub Total por bloque
  * y TOTAL GENERAL al cierre.
+ *
+ * NOMBRES DE COLUMNA: HEADERS/NUM/INT ya NO se definen aquí — vienen de
+ * Labels::COLUMNS / Labels::NUMERIC_COLUMNS / Labels::INT_COLUMNS en
+ * column_labels.php, la misma fuente que usa index.php para la tabla web.
+ * Para renombrar una columna (o cambiar cuáles son numéricas/enteras),
+ * edita SOLO column_labels.php — nunca este archivo.
  */
+require_once __DIR__ . '/column_labels.php';
+
 class ExportService
 {
     /**
      * Encabezados visibles del reporte (orden = columnas de la vista web).
-     * FF/FF_NOMBRE/RB van pegados a META y a CLASIF_COD/CLASIF_NOMBRE. El
-     * desglose Programado → Modificado → Ejecutado va después, y justo tras
-     * IMPORTE_EJEC (antes de DEVENGADO) van DIFERENCIA, ESTADO y RESPONSABLE
-     * — así lo pidió el área usuaria.
+     * Alias de Labels::COLUMNS: se mantiene el nombre HEADERS por compatibilidad
+     * con el resto de este archivo (y con index.php, que también lo referencia
+     * en algún punto del selector de campos vía array_keys/array_intersect).
      */
-    public const HEADERS = [
-        'ESTADO_CMN'          => 'ESTADO CMN',
-        'ESTADO_FASE'         => 'FASE',
-        'NRO_LINEAS'          => 'N° LÍNEAS',
-        'PROGR_ANO_1'         => 'PROGR_ANO_1',
-        'FF'                  => 'FF',
-        'FF_NOMBRE'           => 'FUENTE FINANCIAMIENTO',
-        'RB'                  => 'RB',
-        'META'                => 'META',
-        'GENERICA'            => 'GENÉRICA',
-        'CLASIF_COD'          => 'CLASIF_COD',
-        'CLASIF_NOMBRE'       => 'CLASIFICADOR',
-        'TIPO_BIEN'           => 'TIPO_BIEN',
-        'CCOSTO_COD'          => 'CCOSTO_COD',
-        'CCOSTO_NOMBRE'       => 'CCOSTO_NOMBRE',
-        'TIPO_USO'            => 'TIPO_USO',
-        'ACTIV_OPERAT_COD'    => 'ACTIV_OPERAT_COD',
-        'ACTIV_OPERAT_NOMBRE' => 'ACTIVIDAD OPERATIVA',
-        'GRUPO_BIEN'          => 'GRUPO_BIEN',
-        'CLASE_BIEN'          => 'CLASE_BIEN',
-        'FAMILIA_BIEN'        => 'FAMILIA_BIEN',
-        'ITEM_BIEN'           => 'ITEM_BIEN',
-        'COD_PRODUCTO'        => 'CÓDIGO PRODUCTO',
-        'NOMBRE_ITEM'         => 'NOMBRE_ITEM',
-        'UNIDAD_MEDIDA'       => 'UNIDAD_MEDIDA',
-        'CANTIDAD_PROG'       => 'CANTIDAD',
-        'PRECIO_UNIT_PROG'    => 'PRECIO_UNIT',
-        'IMPORTE_PROG'        => 'IMPORTE CMN PROGRAMADO',
-        'CANTIDAD_MOD'        => 'CANTIDAD',
-        'PRECIO_UNIT_MOD'     => 'PRECIO_UNIT',
-        'IMPORTE_MOD'         => 'IMPORTE CMN MODIFICADO',
-        'CANTIDAD_EJEC'       => 'CANTIDAD',
-        'PRECIO_UNIT_EJEC'    => 'PRECIO_UNIT',
-        'IMPORTE_EJEC'        => 'IMPORTE CMN EJECUTADO',
-        'DIFERENCIA'          => 'DIFERENCIA',
-        'ESTADO_EJEC'         => 'ESTADO',
-        'RESPONSABLE'         => 'RESPONSABLE',
-        'DEVENGADO'           => 'DEVENGADO',
-        'SALDO_DEVENGAR'      => 'SALDO POR DEVENGAR',
-        'ESTADO_ORDEN'        => 'ESTADO ORDEN',
-    ];
+    public const HEADERS = Labels::COLUMNS;
 
-    /** Columnas enteras (sin decimales). */
-    public const INT = ['NRO_LINEAS'];
+    /** Columnas enteras (sin decimales). Alias de Labels::INT_COLUMNS. */
+    public const INT = Labels::INT_COLUMNS;
 
-    /** Columnas numéricas (para formateo/alineación). */
-    public const NUM = [
-        'NRO_LINEAS',
-        'CANTIDAD_PROG','PRECIO_UNIT_PROG','IMPORTE_PROG',
-        'CANTIDAD_MOD','PRECIO_UNIT_MOD','IMPORTE_MOD',
-        'CANTIDAD_EJEC','PRECIO_UNIT_EJEC','IMPORTE_EJEC','DEVENGADO','DIFERENCIA','SALDO_DEVENGAR',
-    ];
+    /** Columnas numéricas (para formateo/alineación). Alias de Labels::NUMERIC_COLUMNS. */
+    public const NUM = Labels::NUMERIC_COLUMNS;
 
     /** Paleta de la vista web: [color fuerte, color claro] por actividad. */
     private const PALETA = [
@@ -82,9 +44,9 @@ class ExportService
      *  · Ejecutado=verde. Mismos valores que el frontend, para que el Excel
      *  se vea idéntico a la pantalla. */
     private const FASE_HEX = [
-        'PROGRAMADO' => ['#eab308', '#fefce8'],
-        'MODIFICADO' => ['#f97316', '#fff7ed'],
-        'EJECUTADO'  => ['#10b981', '#ecfdf5'],
+        'PROGRAMADO' => ['#FFFF00', '#fefce8'],
+        'MODIFICADO' => ['#FFC000', '#fff7ed'],
+        'EJECUTADO'  => ['#47D359', '#ecfdf5'],
     ];
 
     /** Qué columna pertenece a qué etapa (CANTIDAD/PRECIO_UNIT/IMPORTE de cada una). */
@@ -194,6 +156,40 @@ class ExportService
             } elseif (in_array($key, self::NUM, true)) {
                 $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'#,##0.00\';text-align:right">'
                       . number_format((float)$v, 2, '.', '') . '</td>';
+            } elseif ($key === 'ESTADO_EJEC') {
+                // "Ejecutado" en azul y negrita · "Pendiente" en negrita (negro),
+                // igual que en la hoja de referencia del área usuaria. La
+                // comparación de estado usa el texto original (por si cambia
+                // de mayúsc/minúsc en el futuro); solo lo que se IMPRIME va en
+                // mayúsculas.
+                $texto = (string)$v;
+                $esEjecutado = strcasecmp($texto, 'Ejecutado') === 0;
+                $color = $esEjecutado ? '#0000FF' : '#000000';
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
+                      . htmlspecialchars(mb_strtoupper($texto, 'UTF-8')) . '</td>';
+            } elseif ($key === 'ESTADO_FASE') {
+                // Mismo texto que en pantalla: Labels::FASES traduce el valor
+                // crudo del SQL al nombre configurado (Certificado/Compromiso/
+                // Devengado en vez de Programado/Modificado/Ejecutado).
+                $texto = Labels::FASES[$v] ?? (string)$v;
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
+                      . htmlspecialchars($texto) . '</td>';
+            } elseif ($key === 'ESTADO_CMN') {
+                /* Mismo criterio que la pantalla: el texto crudo trae varios
+                   estados separados por coma ("PROGRAMADO, MODIFICADO"). En
+                   vez de una sola línea larga, cada estado va en su propia
+                   línea dentro de la MISMA celda de Excel.
+                   Truco necesario para Excel: un <br> normal se ve bien en el
+                   navegador, pero Excel (que solo entiende esto como HTML/MHT)
+                   lo trata como fin de celda si no se le indica lo contrario.
+                   El atributo mso-data-placement="same-cell" es justamente esa
+                   indicación: "este salto de línea queda DENTRO de la celda".
+                   white-space:normal + vertical-align:top hacen que la celda
+                   se vea bien también si se abre en un navegador. */
+                $partes = array_filter(array_map('trim', explode(',', (string)$v)));
+                $html   = implode('<br mso-data-placement="same-cell">', array_map('htmlspecialchars', $partes));
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\';white-space:normal;vertical-align:top" valign="top">'
+                      . $html . '</td>';
             } else {
                 $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
                       . htmlspecialchars((string)$v) . '</td>';

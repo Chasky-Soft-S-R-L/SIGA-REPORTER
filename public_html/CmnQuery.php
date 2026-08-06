@@ -23,6 +23,16 @@
  *                    área usuaria; negativo = sobregiro respecto al CMN original
  *   SALDO_DEVENGAR = Ejecutado - Devengado                     ← ejecutado aún sin devengar
  *   (la columna Compromiso bruto = VALOR_DEPEND ya NO se expone: no interesa)
+ *
+ * NOTA SOBRE CANT_VIG / MNTO_VIG (fix POLLO BEBE, sec_cua_mod_sal con saldo 0):
+ *   El vigente sale de COALESCE(NULLIF(MAX(s.CANT_TOTAL),0), SUM(det no excluido)).
+ *   El NULLIF(...,0) es clave: SIG_CUADRO_MODIFICADO_SALDO a veces trae CANT_TOTAL=0
+ *   (saldo sin poblar) para un ítem que SÍ está vigente en el DET (estado 'C', 300
+ *   und). Sin el NULLIF, COALESCE(0, 300) = 0 y el importe modificado caía a 0
+ *   (el precio se salvaba por otra rama, por eso se veía 3.00 × 0 = 0). Verificado
+ *   en el centro 104.07.13.03.16: 0 casos de "saldo 0 legítimo", así que tratar el
+ *   saldo 0 como "sin dato" (y caer al DET) es correcto. El CASE externo
+ *   "... = 0 THEN 0" sigue cubriendo el caso legítimo de todo-excluido → vigente 0.
  */
 class CmnQuery
 {
@@ -124,7 +134,7 @@ class CmnQuery
                           THEN 'CERTIFICADO · Cert ' + CONVERT(VARCHAR, cert.NRO_CERTIFICA)
                           ELSE 'PENDIENTE' END)                 AS ESTADO_ORDEN,
             ''                                                      AS RESPONSABLE,
-            STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', ANTIGUO' ELSE '' END
+            STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', PROGRAMADO' ELSE '' END
                   + CASE WHEN D.LIN_INCL  > 0 THEN ', INCLUIDO' ELSE '' END
                   + CASE WHEN D.LIN_EXCL  > 0 THEN ', EXCLUIDO' ELSE '' END
                   + CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0
@@ -206,12 +216,16 @@ class CmnQuery
                        MAX(d.CLASE_BIEN)    AS CLASE_BIEN,     MAX(d.FAMILIA_BIEN) AS FAMILIA_BIEN,
                        MAX(d.ITEM_BIEN)     AS ITEM_BIEN,      MAX(d.UNIDAD_MEDIDA) AS UNIDAD_MEDIDA,
                        MAX(d.PRECIO_UNIT)   AS PRECIO_UNIT,
+                       /* CANT_VIG: NULLIF(...,0) trata un saldo=0 como \"sin dato de
+                          saldo\" y cae a la suma del DET (fix POLLO BEBE). El CASE
+                          externo sigue devolviendo 0 solo si TODO está excluido. */
                        CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
-                            ELSE COALESCE(MAX(s.CANT_TOTAL),
+                            ELSE COALESCE(NULLIF(MAX(s.CANT_TOTAL), 0),
                                           SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
                        END AS CANT_VIG,
+                       /* MNTO_VIG: misma corrección; es la cantidad vigente × precio. */
                        CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
-                            ELSE COALESCE(MAX(s.CANT_TOTAL),
+                            ELSE COALESCE(NULLIF(MAX(s.CANT_TOTAL), 0),
                                           SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
                                  * MAX(d.PRECIO_UNIT)
                        END AS MNTO_VIG,
