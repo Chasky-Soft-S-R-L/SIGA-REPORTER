@@ -95,6 +95,8 @@ class CmnQuery
     private function innerSql(bool $withCC): string
     {
         $filtroCC = $withCC ? " AND d.CENTRO_COSTO = :ccosto " : "";
+        $repTI = "(CASE WHEN ISNULL(D.MOD_TI,0) > 0 THEN D.MNTO_TOTAL / D.MOD_TI
+                        ELSE 1.0 / D.GRUPOS_TI END)";
         return "
         SELECT
             D.ANNO_PROG                                             AS PROGR_ANO_1,
@@ -154,30 +156,26 @@ class CmnQuery
                          THEN ', MODIFICADO' ELSE '' END
                   , 1, 2, '')                                       AS ESTADO_CMN,
             D.NRO_LINEAS                                            AS NRO_LINEAS,
-            /* CANTIDAD_EJEC/PRECIO_UNIT_EJEC/IMPORTE_EJEC/DEVENGADO ya NO usan
-               el prorrateo repTI por presupuesto (D.MOD_TI/GRUPOS_TI): `dev`
-               (más abajo) calcula el monto EXACTO de esta línea usando el peso
-               real declarado en SIG_ORDEN_ITEM_PPTO por cada orden (0%, 100% o
-               proporcional según lo que el propio SIGA registró), en vez de
-               repartir por proporción del presupuesto planeado. Cuando el ítem
-               solo vive en una línea de clasificador, el peso siempre es 1 y
-               el resultado es idéntico al de antes; cuando vive en varias
-               líneas (el bug original: cabecera vs. tabla no coincidían), el
-               peso ahora refleja qué orden pertenece a cuál línea de verdad. */
+            /* CANTIDAD_EJEC: cantidad ejecutada (ligada al ejecutado del cuadro). */
             CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(dev.MNTO_EJEC,0) > 0 THEN 1 ELSE 0 END
-                 ELSE ISNULL(dev.CANT_DEV, 0)
+                 WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.CANT_DEV, 0)
+                 ELSE ROUND(ISNULL(dev.CANT_DEV, 0) * {$repTI}, 4)
             END                                                     AS CANTIDAD_EJEC,
             /* PRECIO_UNIT_EJEC: precio unitario según el EJECUTADO del cuadro. */
             CASE WHEN D.TIPO_BIEN='S'
-                 THEN ISNULL(dev.MNTO_EJEC, 0)
+                 THEN CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_EJEC, 0)
+                           ELSE ROUND(ISNULL(dev.MNTO_EJEC, 0) * {$repTI}, 2) END
                  WHEN ISNULL(dev.CANT_DEV,0) > 0 THEN dev.MNTO_EJEC / dev.CANT_DEV
                  ELSE 0 END                                         AS PRECIO_UNIT_EJEC,
-            /* IMPORTE_EJEC = compromiso ejecutado del cuadro (dm.MNTO_SOLES,
-               ponderado por el peso real de clasificador que calcula `dev`). */
-            ISNULL(dev.MNTO_EJEC, 0)                               AS IMPORTE_EJEC,
-            /* DEVENGADO = devengado contable real (SIG_DEVENGADO), mismo criterio. */
-            ISNULL(dev.MNTO_DEVREAL, 0)                            AS DEVENGADO,
+            /* IMPORTE_EJEC = compromiso ejecutado del cuadro (dm.MNTO_SOLES). */
+            CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_EJEC, 0)
+                 ELSE ROUND(ISNULL(dev.MNTO_EJEC, 0) * {$repTI}, 2)
+            END                                                     AS IMPORTE_EJEC,
+            /* DEVENGADO = devengado contable real (SIG_DEVENGADO). */
+            CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEVREAL, 0)
+                 ELSE ROUND(ISNULL(dev.MNTO_DEVREAL, 0) * {$repTI}, 2)
+            END                                                     AS DEVENGADO,
             /* DIFERENCIA = Programado (CMN original) - Ejecutado. Confirmado por el
                área usuaria: la diferencia se mide contra lo ORIGINALMENTE programado,
                no contra el vigente/modificado. Negativo = se ejecutó más de lo que
@@ -190,16 +188,14 @@ class CmnQuery
                               ELSE 1.0 / D.GRUPOS_ITEM END, 2)
              END)
             -
-            ISNULL(dev.MNTO_EJEC, 0)                               AS DIFERENCIA,
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_EJEC, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_EJEC, 0) * {$repTI}, 2) END)  AS DIFERENCIA,
             /* SALDO_DEVENGAR = Ejecutado - Devengado  (ejecutado aún sin devengar). */
-            ISNULL(dev.MNTO_EJEC, 0) - ISNULL(dev.MNTO_DEVREAL, 0)  AS SALDO_DEVENGAR,
-            /* GRUPOS_TI: cuántas líneas del cuadro (mismo centro+actividad+ítem,
-               distinto clasificador) comparten este mismo ítem. Ya NO indica un
-               problema de cálculo (eso se resolvió arriba) — es solo informativo,
-               por si el frontend quiere mostrar este ítem también se programó
-               con otro clasificador en esta actividad, sin implicar que los
-               números sean inexactos. */
-            D.GRUPOS_TI                                            AS GRUPOS_TI
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_EJEC, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_EJEC, 0) * {$repTI}, 2) END)
+            -
+            (CASE WHEN D.GRUPOS_TI <= 1 THEN ISNULL(dev.MNTO_DEVREAL, 0)
+                  ELSE ROUND(ISNULL(dev.MNTO_DEVREAL, 0) * {$repTI}, 2) END)  AS SALDO_DEVENGAR
         FROM (
             SELECT SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
                    SEC_FUNC, CLASIFICADOR, TIPO_USO, TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
