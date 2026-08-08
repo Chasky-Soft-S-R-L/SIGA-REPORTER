@@ -147,7 +147,7 @@ class CmnQuery
                      CASE WHEN cert.NRO_CERTIFICA IS NOT NULL
                           THEN 'CERTIFICADO · Cert ' + CONVERT(VARCHAR, cert.NRO_CERTIFICA)
                           ELSE 'PENDIENTE' END)                 AS ESTADO_ORDEN,
-            ISNULL(per.nombre_completo, '')                        AS RESPONSABLE,
+            ''                                                      AS RESPONSABLE,
             STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', PROGRAMADO' ELSE '' END
                   + CASE WHEN D.LIN_INCL  > 0 THEN ', INCLUIDO' ELSE '' END
                   + CASE WHEN D.LIN_EXCL  > 0 THEN ', EXCLUIDO' ELSE '' END
@@ -297,33 +297,6 @@ class CmnQuery
               AND  ISNULL(c.ANULADO,0)=0
             ORDER BY cp.NRO_CERTIFICA DESC
         ) cert
-        /* RESPONSABLE: el empleado que figura en SIG_PAAC_CONSOLIDADO para el
-           consolidado de esta fila del cuadro (vía SIG_CUADRO_MODIFICADO_CMN,
-           que enlaza D.SEC_CUA_MOD_SAL con el consolidado). Un mismo consolidado
-           puede tener 2 filas en SIG_PAAC_CONSOLIDADO (TIPO_CONSOLID=1 original,
-           =2 actualizado); se toma el EMPLEADO del TIPO_CONSOLID más alto
-           (ROW_NUMBER, no MAX(EMPLEADO) — un MAX de texto no garantiza que sea
-           el del tipo más reciente, solo el que ordena más alto alfabéticamente).
-           SIG_PERSONAL.empleado.nombre_completo trae el nombre completo. */
-        LEFT JOIN (
-            SELECT SEC_EJEC, ANNO_EJEC, SEC_CUA_MOD_SAL, EMPLEADO
-            FROM (
-                SELECT cmn.SEC_EJEC, cmn.ANNO_EJEC, cmn.SEC_CUA_MOD_SAL, pc.EMPLEADO,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY cmn.SEC_EJEC, cmn.ANNO_EJEC, cmn.SEC_CUA_MOD_SAL
-                           ORDER BY cmn.TIPO_CONSOLID DESC
-                       ) AS rn
-                FROM   SIG_CUADRO_MODIFICADO_CMN cmn
-                JOIN   SIG_PAAC_CONSOLIDADO pc
-                       ON pc.SEC_EJEC=cmn.SEC_EJEC AND pc.ANO_EJE=cmn.ANNO_EJEC
-                      AND pc.TIPO_CONSOLID=cmn.TIPO_CONSOLID AND pc.NRO_CONSOLID=cmn.NRO_CONSOLID
-                      AND pc.TIPO_BIEN=cmn.TIPO_BIEN
-            ) x
-            WHERE x.rn = 1
-        ) resp
-             ON resp.SEC_EJEC=D.SEC_EJEC AND resp.ANNO_EJEC=D.ANNO_EJEC AND resp.SEC_CUA_MOD_SAL=D.SEC_CUA_MOD_SAL
-        LEFT JOIN SIG_PERSONAL per
-             ON per.sec_ejec=D.SEC_EJEC AND per.empleado=resp.EMPLEADO
         LEFT JOIN (
             /* FIX: agrupado por CENTRO + TAREA + ÍTEM (misma clave que `dev`,
                vía SIG_DEPEN_META_CUADRO) en vez de META + CLASIFICADOR + ÍTEM.
