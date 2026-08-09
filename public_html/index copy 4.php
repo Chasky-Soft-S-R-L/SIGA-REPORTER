@@ -13,17 +13,6 @@
  * IMPORTE_EJEC / DATOS EJECUCION, con el mismo criterio que ExportService, para
  * que la pantalla y el Excel digan siempre lo mismo.
  *
- * COLUMNA DATOS EJECUCION (ESTADO_ORDEN): una badge por orden, con la fase
- * alcanzada y los DOS correlativos de la certificación:
- *     · SIGA = correlativo interno de logística (SIG_CERTIFICACION.NRO_CERTIFICA)
- *     · SIAF = correlativo del expediente en el MEF (NRO_CERTIFICA_SIAF)
- * Son el MISMO documento con dos numeraciones (relación 1:1, verificada
- * 2022-2026). Un CCP cubre varias líneas meta+clasificador y varios centros,
- * así que el vínculo ítem→certificado sale siempre de la ORDEN, nunca de
- * buscar por meta+clasificador. Si la certificación fue anulada después
- * (ANULADO<>0, independiente del estado SIAF) se marca con una badge roja.
- * El detalle de cómo funciona el CCP está documentado en CmnQuery.php.
- *
  * CARGA BAJO DEMANDA: al abrir la pantalla NO se consulta el SIGA (traer todos
  * los centros es la operación más costosa). Se muestra un estado inicial y los
  * datos llegan al elegir un centro o al pulsar "Cargar todos los centros".
@@ -348,7 +337,7 @@ include __DIR__ . '/partials/head.php';
       </div>
       <!-- Fila 3: buscador al 100% de ancho -->
       <div class="relative w-full">
-        <input id="q" type="text" value="<?= htmlspecialchars($fQ) ?>" placeholder="Buscar ítem, clasificador, orden o N° de certificación (SIGA/SIAF)…" class="input-bordered pl-9 w-full">
+        <input id="q" type="text" value="<?= htmlspecialchars($fQ) ?>" placeholder="Buscar ítem, clasificador u orden…" class="input-bordered pl-9 w-full">
         <svg class="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" stroke-width="2"/><path d="M21 21l-4-4" stroke-width="2" stroke-linecap="round"/></svg>
       </div>
     </div>
@@ -603,16 +592,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* Estado consolidado del ítem: viene calculado desde la capa Query (ESTADO_FASE). */
   const faseKey=d=>FMAP[d.ESTADO_FASE]?d.ESTADO_FASE:'PROGRAMADO';
 
-  /* Etiqueta compacta de la certificación de una orden, para reutilizarla en
-     el modal (tabla de órdenes y expediente). Los DOS correlativos son del
-     MISMO documento: SIGA = interno de logística, SIAF = expediente del MEF. */
-  function certLbl(siga,siaf,anulada){
-    if(!siga)return '';
-    let t='SIGA '+siga+(siaf?' · SIAF '+siaf:'');
-    if(+anulada)t+=' · ANULADA';
-    return t;
-  }
-
   /* FASE DE EJECUCIÓN (SIAF) que se MUESTRA en la columna FASE de la tabla:
      CERTIFICADO · COMPROMETIDO · DEVENGADO (la última alcanzada), o vacío si el
      ítem aún no llegó a ninguna. Es DISTINTA del ESTADO CMN (Programado /
@@ -783,39 +762,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     $('expPdf').href  ='?'+params(Object.assign({export:'pdf'  },cx)).toString();
   }
 
-  /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada
-     O/C u O/S y separa los DOS correlativos de la certificación.
-
-     El texto que llega en ESTADO_ORDEN (lo arma CmnQuery::innerSql, bloque `ej`)
-     tiene la forma:
-         "OS 171 · DEVENGADO · Cert SIGA 211 · SIAF 327 · CERT ANULADA"
-     donde los tres últimos tramos son opcionales. Se separan en badges distintas
-     porque son numeraciones de sistemas distintos para el MISMO documento:
-       · SIGA (ámbar)  = correlativo interno de logística
-       · SIAF (índigo) = correlativo del expediente presupuestal en el MEF
-       · ANULADA (rojo)= la certificación se anuló después (ANULADO<>0; es
-                         independiente del estado SIAF: hay certificaciones
-                         aprobadas en el SIAF que igual están anuladas). */
-  function badge(estado){
-    return (estado||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{
-      const anulada=/CERT\s+ANULADA/i.test(p);
-      const partes=p.split('·').map(x=>x.trim()).filter(Boolean);
-      const siga=(partes.find(x=>/^cert\s+siga/i.test(x))||'').replace(/^cert\s+siga\s*/i,'');
-      const siaf=(partes.find(x=>/^siaf/i.test(x))||'').replace(/^siaf\s*/i,'');
-      const cabeza=partes.filter(x=>!/^cert\s+siga/i.test(x)&&!/^siaf/i.test(x)&&!/^cert\s+anulada/i.test(x)).join(' · ');
-      const E=cabeza.toUpperCase();
-      let c='bg-gray-100 text-gray-600';
-      if(E.includes('DEVENGADO'))          c='bg-primary/15 text-primary-dark';
-      else if(E.includes('COMPROMETIDO'))  c='bg-secondary/15 text-secondary-dark';
-      else if(E.includes('CERTIFICADO'))   c='bg-warning/20 text-yellow-700';
-      else if(E.includes('PENDIENTE'))     c='bg-gray-100 text-gray-500';
-      let out='<span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] '+c+'">'+ec(cabeza)+'</span>';
-      if(siga)out+=' <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300" title="Certificación SIGA · correlativo interno de logística">SIGA '+ec(siga)+'</span>';
-      if(siaf)out+=' <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-indigo-100 text-indigo-800 border border-indigo-300" title="Certificación SIAF · correlativo del expediente presupuestal en el MEF">SIAF '+ec(siaf)+'</span>';
-      if(anulada)out+=' <span class="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-100 text-red-700 border border-red-300" title="La certificación fue anulada posteriormente">ANULADA</span>';
-      return out;
-    }).join(' ');
-  }
+  /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada O/C u O/S. */
+  function badge(estado){return (estado||'').split(',').map(s=>s.trim()).filter(Boolean).map(p=>{const e=p.toUpperCase();let c='bg-gray-100 text-gray-600';if(e.includes('DEVENGADO'))c='bg-primary/15 text-primary-dark';else if(e.includes('COMPROMETIDO'))c='bg-secondary/15 text-secondary-dark';else if(e.includes('CERTIFICADO'))c='bg-warning/20 text-yellow-700';else if(e.includes('PENDIENTE'))c='bg-gray-100 text-gray-500';return '<span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] '+c+'">'+ec(p)+'</span>';}).join(' ');}
   /* Estado de línea del CMN: PROGRAMADO/ANTIGUO (base) · INCLUIDO · EXCLUIDO ·
      MODIFICADO. El texto abreviado (PRG/INC/EXC/-MOD) y el tooltip vienen de
      LBL.cmnEstado; el color es diseño y se queda aquí (mapeado por la misma
@@ -1027,9 +975,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
              2-3 líneas y agrandaban toda la fila. Ahora es una sola línea
              (sin flex-wrap, contenida por overflow:hidden del ancho fijo de
              la columna); el listado completo se ve al pasar el mouse, en el
-             title del td — mismo patrón que el resto de columnas de texto.
-             OJO: con las badges SIGA/SIAF esta columna necesita ~280px en
-             Labels::WIDTHS, si no corta casi siempre. */
+             title del td — mismo patrón que el resto de columnas de texto. */
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden" title="'+ec(d[k])+'"><div class="flex gap-1 overflow-hidden whitespace-nowrap">'+badge(d[k])+'</div></td>';
         }
         if(k==='ESTADO_EJEC'){
@@ -1277,9 +1223,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   function prep(h){return{
     cua:dedup(h.cuadro,r=>r.etapa+'|'+r.monto+'|'+(r.fecha||'')),
     con:dedup(h.consolidado,r=>r.nro+'|'+r.monto),
-    /* La clave incluye nro_siaf por prolijidad, aunque la relación SIGA↔SIAF es
-       1:1 y el nro solo ya sería único dentro del año. */
-    cer:dedup(h.certificacion,r=>r.nro+'|'+(r.nro_siaf||'')+'|'+r.monto+'|'+r.estado),
+    cer:dedup(h.certificacion,r=>r.nro+'|'+r.monto+'|'+r.estado),
     ord:dedup(h.ordenes,r=>r.orden+'|'+r.monto),
     fas:dedup(h.fases,r=>r.fase+'|'+r.doc+'|'+r.monto)};}
   function secT(t){return '<div class="text-[10px] font-bold uppercase tracking-[.15em] text-gray-700 border-b pb-1 mb-2 mt-5 first:mt-0" style="border-color:#333">'+t+'</div>';}
@@ -1350,14 +1294,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       const estado = pe<0.005 ? '<span class="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style="background:#05966915;color:#059669"><i class="fa-solid fa-circle-check"></i>Devengado</span>'
                    : dv>0.005 ? '<span class="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style="background:#0284c715;color:#0284c7"><i class="fa-solid fa-circle-half-stroke"></i>Parcial</span>'
                               : '<span class="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded-full" style="background:#6b728015;color:#6b7280"><i class="fa-regular fa-circle"></i>Comprometido</span>';
-      /* Certificación de la orden bajo el N°: los dos correlativos del mismo
-         documento (SIGA interno / SIAF del MEF). Vienen de ordenesItem(). */
-      const cert=certLbl(r.nro_cert,r.nro_cert_siaf,r.cert_anulada);
-      const certHtml=cert
-        ? '<span class="block text-[9px] mt-0.5 '+(+r.cert_anulada?'text-red-600 font-semibold':'text-gray-400')+'" title="Certificación de crédito presupuestario · SIGA = correlativo interno, SIAF = expediente del MEF">'+ec(cert)+'</span>'
-        : '';
       return '<tr class="hover:bg-emerald-50/40 transition-colors">'
-        +'<td class="py-2 px-2 border-b border-gray-100"><span class="font-bold text-[12px] text-gray-800">'+ec(r.orden)+'</span>'+certHtml+'</td>'
+        +'<td class="py-2 px-2 border-b border-gray-100"><span class="font-bold text-[12px] text-gray-800">'+ec(r.orden)+'</span></td>'
         +'<td class="py-2 px-2 border-b border-gray-100 text-[11px] text-gray-600">'+ec(r.proveedor||'—')+'</td>'
         +'<td class="py-2 px-2 border-b border-gray-100">'+estado+'</td>'
         +'<td class="py-2 px-2 border-b border-gray-100 text-right tabular-nums text-[12px] text-gray-800">'+money(ej)+'</td>'
@@ -1368,7 +1306,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     const th=(t,al)=>'<th class="py-2 px-2 text-[9px] uppercase tracking-wider font-bold text-white text-'+(al||'left')+'">'+t+'</th>';
     out+='<div class="rounded-xl overflow-hidden border border-gray-200">'
       +'<table class="w-full"><thead><tr style="background:linear-gradient(135deg,#047857,#059669)">'
-        +th('N° Orden · Certificación')+th('Proveedor')+th('Estado')+th('Ejecutado','right')+th('Devengado','right')+th('Pend. devengar','right')
+        +th('N° Orden')+th('Proveedor')+th('Estado')+th('Ejecutado','right')+th('Devengado','right')+th('Pend. devengar','right')
       +'</tr></thead><tbody>'+filas+'</tbody>'
       +'<tfoot><tr style="background:#064e3b" class="text-white font-bold">'
         +'<td colspan="3" class="py-2 px-2 text-right text-[11px] uppercase tracking-wide">Total · '+OR.length+' '+(OR.length===1?'orden':'órdenes')+'</td>'
@@ -1376,7 +1314,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         +'<td class="py-2 px-2 text-right tabular-nums text-[12px]">'+money(tD)+'</td>'
         +'<td class="py-2 px-2 text-right tabular-nums text-[12px]">'+money(tP)+'</td>'
       +'</tr></tfoot></table></div>'
-      +'<p class="text-[10px] text-gray-400 mt-2 flex items-start gap-1"><i class="fa-solid fa-circle-info mt-0.5"></i><span>Ejecutado = compromiso ejecutado del cuadro · Devengado = devengado real por orden (prorrateado por dependencia). La certificación tiene dos correlativos del mismo documento: SIGA (interno) y SIAF (expediente del MEF). Girado y pagado se registran en el SIAF.</span></p>';
+      +'<p class="text-[10px] text-gray-400 mt-2 flex items-start gap-1"><i class="fa-solid fa-circle-info mt-0.5"></i><span>Ejecutado = compromiso ejecutado del cuadro · Devengado = devengado real por orden (prorrateado por dependencia). Girado y pagado se registran en el SIAF.</span></p>';
     return out;
   }
 
@@ -1429,11 +1367,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       const tVig=vig.reduce((s,r)=>s+ +r.monto,0);
       let resumen=fila('<b>Certificado vigente</b> · '+vig.length+' cert.'+(anul.length?' <span class="text-gray-400">('+anul.length+' anulada'+(anul.length>1?'s':'')+')</span>':''),
                        '<b style="color:'+INK.ambar+'">S/ '+money(tVig)+'</b>');
-      /* Cada certificación con sus DOS correlativos: SIGA (interno de logística)
-         y SIAF (expediente del MEF). Es el mismo documento, relación 1:1. */
       const detalle=cer.map(r=>{const anu=/Anulada/i.test(r.estado||'');
-        const num='Cert. SIGA '+ec(r.nro)+(r.nro_siaf?' · <span title="Correlativo del expediente en el SIAF">SIAF '+ec(r.nro_siaf)+'</span>':'');
-        return fila((anu?'<span class="line-through text-gray-400">':'')+num+' · '+ec(r.estado)+(anu?' <b style="color:'+INK.rojo+'" class="no-underline">ANULADO</b></span>':'')+' <span class="text-gray-400 italic">('+ec(r.fecha)+')</span>',
+        return fila((anu?'<span class="line-through text-gray-400">':'')+'Cert. '+ec(r.nro)+' · '+ec(r.estado)+(anu?' <b style="color:'+INK.rojo+'" class="no-underline">ANULADO</b></span>':'')+' <span class="text-gray-400 italic">('+ec(r.fecha)+')</span>',
                     '<span class="'+(anu?'line-through text-gray-400':'font-bold')+'">S/ '+money(r.monto)+'</span>');}).join('');
       p3=resumen+'<details class="mt-1"><summary class="text-[11px] text-gray-500 cursor-pointer hover:text-gray-700 select-none">Ver detalle de las '+cer.length+' certificaciones</summary><div class="mt-1">'+detalle+'</div></details>';
     } else p3='<span class="text-xs text-gray-400">Sin certificación presupuestal todavía.</span>';
@@ -1442,19 +1377,16 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     if(OR.length){
       let tE=0,tD=0;
       const filas=OR.map(r=>{const ej=+(r.ejecutado ?? r.compromiso),dv=+r.devengado;tE+=ej;tD+=dv;
-        const cert=certLbl(r.nro_cert,r.nro_cert_siaf,r.cert_anulada);
-        return fila(ec(r.orden)+' <span class="text-gray-400">· '+ec(r.proveedor||'—')+'</span>'
-                    +(cert?' <span class="text-[10px] '+(+r.cert_anulada?'text-red-600 font-semibold':'text-gray-400')+'">· '+ec(cert)+'</span>':''),
-                    'Ejec. <b>S/ '+money(ej)+'</b> · Dev. <b style="color:'+INK.verde+'">S/ '+money(dv)+'</b>');}).join('');
+        return fila(ec(r.orden)+' <span class="text-gray-400">· '+ec(r.proveedor||'—')+'</span>','Ejec. <b>S/ '+money(ej)+'</b> · Dev. <b style="color:'+INK.verde+'">S/ '+money(dv)+'</b>');}).join('');
       p4=filas+fila('<b>Total '+OR.length+' órdenes</b>','Ejec. <b>S/ '+money(tE)+'</b> · Dev. <b style="color:'+INK.verde+'">S/ '+money(tD)+'</b>','font-bold');
     } else p4='<span class="text-xs text-gray-400">Sin orden de compra/servicio emitida.</span>';
     out+=secT('¿Qué pasó con este ítem? · flujo del gasto')
       +'<div class="flex justify-end -mt-1 mb-2"><button onclick="document.getElementById(\'histTimeline\').click()" class="text-[11px] font-semibold inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-white" style="background:linear-gradient(135deg,#047857,#10b981)"><i class="fa-solid fa-sitemap"></i> Ver como línea de tiempo</button></div>'
       +paso('fa-clipboard-list',INK.gris,'Programación · Cuadro de Necesidades',p1)
       +paso('fa-layer-group',INK.violeta,'Consolidación PAAC · aquí se fija el precio real',p2)
-      +paso('fa-stamp',INK.ambar,'Certificación presupuestal · SIGA + SIAF',p3)
+      +paso('fa-stamp',INK.ambar,'Certificación presupuestal',p3)
       +paso('fa-file-invoice-dollar',INK.azul,'Orden de compra / servicio · ejecución por orden',p4,true)
-      +'<p class="text-[10px] text-gray-400 italic mt-1">Un mismo certificado cubre varias líneas meta+clasificador y varios centros; por eso el vínculo con el ítem sale de la orden. Girado y pagado se registran en el SIAF.</p>';
+      +'<p class="text-[10px] text-gray-400 italic mt-1">Girado y pagado se registran en el SIAF.</p>';
     return out;
   }
 
@@ -1464,10 +1396,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
      Nodos colapsables (clic abre/cierra rama). Colores por estado:
        devengado=verde · comprometido=azul · pendiente/sin compromiso=gris.
      `traza` viene de action=traza (trazaItem): filas orden con nro_certifica,
-     nro_certifica_siaf, cert_anulada, exp_siaf, estado_siaf, comprometido,
-     ejecutado, devengado, multa. `h` es el historial (para cuadro y consolidado).
-     El nodo Certificación rotula los DOS correlativos (SIGA / SIAF) porque son
-     el mismo documento visto desde logística y desde el MEF. */
+     exp_siaf, estado_siaf, comprometido, devengado. `h` es el historial (para
+     cuadro y consolidado). */
   function renderGrafo(traza,d,h){
     const C={prog:'#6b7280',cons:'#6d28d9',cert:'#b45309',orden:'#0284c7',dev:'#059669',gris:'#9ca3af',rojo:'#dc2626',amber:'#d97706'};
     const money2=n=>(+n||0).toLocaleString('es-PE',{minimumFractionDigits:2,maximumFractionDigits:2});
@@ -1478,19 +1408,11 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     const estadoCMN=(d.ESTADO_CMN||'').trim(); // PROGRAMADO/INCLUIDO/EXCLUIDO/MODIFICADO
 
     const certInfo={};
-    cer.filter(r=>!/Anulada/i.test(r.estado||'')).forEach(r=>{certInfo[r.nro]={monto:+r.monto,fecha:r.fecha||'',siaf:r.nro_siaf||''};});
+    cer.filter(r=>!/Anulada/i.test(r.estado||'')).forEach(r=>{certInfo[r.nro]={monto:+r.monto,fecha:r.fecha||''};});
 
     const byCert={};
     (traza||[]).forEach(r=>{const k=r.nro_certifica||0;(byCert[k]=byCert[k]||[]).push(r);});
     const certKeys=Object.keys(byCert).sort((a,b)=>(+a)-(+b));
-    /* SIAF y anulación por certificación: la traza los trae por orden, pero son
-       de la cabecera, así que basta la primera fila no vacía de cada grupo. */
-    const certSiaf={}, certAnul={};
-    certKeys.forEach(ck=>{
-      const f=byCert[ck].find(r=>r.nro_certifica_siaf);
-      certSiaf[ck]=f?f.nro_certifica_siaf:(certInfo[ck]?certInfo[ck].siaf:'');
-      certAnul[ck]=byCert[ck].some(r=>+r.cert_anulada)?1:0;
-    });
 
     /* ── geometría del árbol SVG ──
        Niveles verticales: Cuadro → Consolidado → Certif → Orden → Devengado.
@@ -1547,7 +1469,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       g+='<rect x="'+x+'" y="'+yT+'" width="4" height="'+hh+'" rx="2" fill="'+col+'"/>';
       g+='<text x="'+(x+16)+'" y="'+(yT+17)+'" font-size="8.5" font-weight="700" letter-spacing="0.4" fill="'+col+'">'+esc(titulo.toUpperCase())+'</text>';
       if(opts.toggle) g+='<text x="'+(x+w-12)+'" y="'+(yT+17)+'" font-size="9" text-anchor="end" fill="'+col+'" class="gtoggle-svg">▾</text>';
-      if(sub) g+='<text x="'+(x+14)+'" y="'+(yT+33)+'" font-size="11" font-weight="600" fill="#374151">'+esc(trunc(sub,26))+'</text>';
+      if(sub) g+='<text x="'+(x+14)+'" y="'+(yT+33)+'" font-size="11" font-weight="600" fill="#374151">'+esc(trunc(sub,24))+'</text>';
       if(monto!=null) g+='<text x="'+(x+14)+'" y="'+(yT+hh-8)+'" font-size="12" font-weight="700" fill="'+col+'">S/ '+money2(monto)+'</text>';
       if(extra) g+='<text x="'+(x+w-12)+'" y="'+(yT+hh-8)+'" font-size="8" text-anchor="end" fill="#9ca3af">'+esc(extra)+'</text>';
       g+='</g>';
@@ -1632,19 +1554,13 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     if(con.length){const cn=con[con.length-1];
       svg+=topBox(cx,yCon,NW,NH,C.cons,'','Consolidado PAAC','N° '+esc(cn.nro),+cn.monto,esc(cn.fecha_precio||cn.fecha_consolid||''));}
 
-    /* ── certificaciones (con toggle colapsable) ──
-       Rótulo con los DOS correlativos: SIGA (interno) · SIAF (expediente MEF).
-       Si la certificación fue anulada, el nodo se pinta en rojo y lo dice. */
+    /* ── certificaciones (con toggle colapsable) ── */
     certKeys.forEach(ck=>{
       const ci=certInfo[ck]||{};
       const ords=byCert[ck];
       const certMonto=ci.monto!=null?ci.monto:ords.reduce((s,r)=>s+ +r.ejecutado,0);
-      const anul=certAnul[ck];
-      const sub='SIGA '+ck+(certSiaf[ck]?' · SIAF '+certSiaf[ck]:'');
-      svg+=topBox(certX[ck],yCer,NW,CERTH,anul?C.rojo:C.cert,'',
-        anul?'Certificación ANULADA':'Certificación',sub,certMonto,
-        ords.length+(ords.length===1?' ord':' ords'),
-        {toggle:true,cls:'gcert-svg',dashed:!!anul,data:'data-cert="'+esc(ck)+'"'});
+      svg+=topBox(certX[ck],yCer,NW,CERTH,C.cert,'','Certificación','Cert. '+esc(ck),certMonto,ords.length+(ords.length===1?' ord':' ords'),
+        {toggle:true,cls:'gcert-svg',data:'data-cert="'+esc(ck)+'"'});
     });
 
     /* ── órdenes + devengado ── */
@@ -1685,16 +1601,14 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     const gDev=(traza||[]).reduce((s,r)=>s+ +r.devengado,0);
     const gMulta=(traza||[]).reduce((s,r)=>s+ (+r.multa||0),0);
     const nOrd=(traza||[]).length;
-    const nAnul=certKeys.filter(ck=>certAnul[ck]).length;
     const foot='<div class="mt-4 pt-3 border-t border-gray-200 flex flex-wrap justify-center gap-x-5 gap-y-1 text-[11px]">'
-      +'<span class="text-gray-500"><i class="fa-solid fa-stamp mr-1" style="color:'+C.cert+'"></i>'+certKeys.length+' certif.'
-        +(nAnul?' <span style="color:'+C.rojo+'">('+nAnul+' anulada'+(nAnul>1?'s':'')+')</span>':'')+'</span>'
+      +'<span class="text-gray-500"><i class="fa-solid fa-stamp mr-1" style="color:'+C.cert+'"></i>'+certKeys.length+' certif.</span>'
       +'<span class="text-gray-500"><i class="fa-solid fa-file-invoice mr-1" style="color:'+C.orden+'"></i>'+nOrd+' órdenes</span>'
       +'<span class="text-gray-500">Ejecutado: <b class="tabular-nums" style="color:#047857">S/ '+money2(gEj)+'</b></span>'
       +'<span class="text-gray-500">Devengado: <b class="tabular-nums" style="color:#059669">S/ '+money2(gDev)+'</b></span>'
       +(gMulta>0.005?'<span style="color:'+C.rojo+'"><i class="fa-solid fa-triangle-exclamation mr-1"></i>Multas: <b class="tabular-nums">S/ '+money2(gMulta)+'</b></span>':'')
       +'</div>'
-      +'<p class="text-[10px] text-gray-400 text-center mt-1">Traza global del ítem en la entidad · cada certificación muestra sus dos correlativos: SIGA (logística) y SIAF (expediente del MEF) · tarjetas con ejecutado, no compromiso bruto · clic en una certificación colapsa su rama</p>';
+      +'<p class="text-[10px] text-gray-400 text-center mt-1">Traza global del ítem en la entidad · tarjetas muestran ejecutado (no compromiso bruto) · clic en una certificación colapsa su rama</p>';
 
     return '<div class="overflow-x-auto"><div style="min-width:'+W+'px;margin:0 auto">'+svg+'</div></div>'+foot;
   }
@@ -1786,7 +1700,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     SIGA.accion('Vista kanban','fa-table-columns',()=>setMode('kanban'),'Cambia a la vista kanban por estado');
     SIGA.accion('Elegir campos visibles','fa-list-check',()=>$('btnCols').click(),'Abre el selector de columnas');
     SIGA.accion('Buscar ítem','fa-magnifying-glass',()=>{qEl.focus();qEl.select();},'Enfoca el buscador de ítems');
-    SIGA.accion('Buscar por N° de certificación','fa-stamp',()=>{qEl.focus();qEl.select();},'El buscador también encuentra por certificación SIGA o SIAF');
     SIGA.accion('Expandir todas las actividades','fa-up-right-and-down-left-from-center',()=>$('gExpand').click(),'Abre todos los bloques del agrupado');
     SIGA.accion('Contraer todas las actividades','fa-down-left-and-up-right-to-center',()=>$('gCollapse').click(),'Cierra todos los bloques del agrupado');
     SIGA.accion('Seleccionar todo lo visible','fa-check-double',()=>{const v=last.rows;const keys=v.map(rowKey);const all=keys.length>0&&keys.every(k=>SEL.has(k));keys.forEach(k=>all?SEL.delete(k):SEL.add(k));paint();},'Marca o desmarca todas las filas de la página');

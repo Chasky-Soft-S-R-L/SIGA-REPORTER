@@ -15,20 +15,6 @@
  * column_labels.php, la misma fuente que usa index.php para la tabla web.
  * Para renombrar una columna (o cambiar cuáles son numéricas/enteras),
  * edita SOLO column_labels.php — nunca este archivo.
- *
- * ESTADO CMN (una sola celda, abreviado):
- *   El texto crudo trae varios estados separados por coma ("PROGRAMADO,
- *   MODIFICADO"). Antes se ponía uno por línea con <br mso-data-placement>,
- *   pero varias versiones de Excel tratan ese <br> como fin de celda y el
- *   ítem salía partido en 2 filas. Ahora va TODO en una sola línea, separado
- *   por comas y ABREVIADO (PRG / INC / EXC / -MOD) desde Labels::CMN_ESTADO.
- *
- * COLUMNA FASE (ESTADO_FASE): muestra la FASE DE EJECUCIÓN (SIAF) —
- *   Certificado / Comprometido / Devengado — es decir, la ÚLTIMA fase que
- *   alcanzó el ítem. Vacío si aún no llegó a ninguna. Es DISTINTA del ESTADO
- *   CMN (Programado / Modificado / Incluido / Excluido). Se deriva por fila de
- *   DEVENGADO / IMPORTE_EJEC / DATOS EJECUCION (ESTADO_ORDEN), no del valor
- *   crudo Programado/Modificado/Ejecutado que trae el SQL.
  */
 require_once __DIR__ . '/column_labels.php';
 
@@ -78,42 +64,6 @@ class ExportService
             $h = ($h * 31 + ord($cod[$i])) % 4294967296;
         }
         return self::PALETA[$h % count(self::PALETA)];
-    }
-
-    /**
-     * Fase de EJECUCIÓN (SIAF) de una fila: CERTIFICADO / COMPROMETIDO /
-     * DEVENGADO — la última fase alcanzada. Vacío si el ítem aún no llegó a
-     * ninguna. Distinta del ESTADO CMN (Programado/Modificado/Incluido/Excluido).
-     * Se deriva de los datos reales de la fila:
-     *   - DEVENGADO > 0                                   → DEVENGADO
-     *   - IMPORTE_EJEC > 0  ó "COMPROMETIDO" en la orden  → COMPROMETIDO
-     *   - "CERTIFICADO" ó "CON ORDEN" en la orden         → CERTIFICADO
-     *   - resto                                            → '' (sin fase todavía)
-     */
-    private static function faseEjecucion(array $r): string
-    {
-        $dev  = (float)($r['DEVENGADO']    ?? 0);
-        $ejec = (float)($r['IMPORTE_EJEC'] ?? 0);
-        $ord  = mb_strtoupper((string)($r['ESTADO_ORDEN'] ?? ''), 'UTF-8');
-        if ($dev > 0.005)                                                     return 'DEVENGADO';
-        if ($ejec > 0.005 || strpos($ord, 'COMPROMETIDO') !== false)          return 'COMPROMETIDO';
-        if (strpos($ord, 'CERTIFICAD') !== false || strpos($ord, 'CON ORDEN') !== false) return 'CERTIFICADO';
-        return '';
-    }
-
-    /**
-     * ESTADO CMN abreviado y en UNA sola línea: "PROGRAMADO, MODIFICADO" →
-     * "PRG, -MOD". Las abreviaturas salen de Labels::CMN_ESTADO (misma fuente
-     * que la pantalla), así Excel y web nunca se desincronizan.
-     */
-    private static function cmnAbrev(string $crudo): string
-    {
-        $partes = array_filter(array_map('trim', explode(',', $crudo)));
-        $abrev  = array_map(function ($p) {
-            $k = mb_strtoupper($p, 'UTF-8');
-            return isset(Labels::CMN_ESTADO[$k]) ? Labels::CMN_ESTADO[$k][0] : $p;
-        }, $partes);
-        return implode(', ', $abrev);
     }
 
     /** Agrupa las filas por actividad operativa y ordena por código de bien. */
@@ -218,19 +168,28 @@ class ExportService
                 $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
                       . htmlspecialchars(mb_strtoupper($texto, 'UTF-8')) . '</td>';
             } elseif ($key === 'ESTADO_FASE') {
-                // FASE DE EJECUCIÓN (SIAF): Certificado / Comprometido / Devengado
-                // (la última alcanzada). Vacío si aún no llegó a ninguna. Distinta
-                // del ESTADO CMN. Se deriva de los datos reales de la fila, no del
-                // valor crudo Programado/Modificado/Ejecutado del SQL.
-                $texto = self::faseEjecucion($r);
+                // Mismo texto que en pantalla: Labels::FASES traduce el valor
+                // crudo del SQL al nombre configurado (Certificado/Compromiso/
+                // Devengado en vez de Programado/Modificado/Ejecutado).
+                $texto = Labels::FASES[$v] ?? (string)$v;
                 $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
                       . htmlspecialchars($texto) . '</td>';
             } elseif ($key === 'ESTADO_CMN') {
-                // UNA sola celda, UNA sola línea, separado por comas y ABREVIADO
-                // (PRG / INC / EXC / -MOD). El <br> anterior partía el ítem en 2
-                // filas en varias versiones de Excel; por eso se eliminó.
-                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
-                      . htmlspecialchars(self::cmnAbrev((string)$v)) . '</td>';
+                /* Mismo criterio que la pantalla: el texto crudo trae varios
+                   estados separados por coma ("PROGRAMADO, MODIFICADO"). En
+                   vez de una sola línea larga, cada estado va en su propia
+                   línea dentro de la MISMA celda de Excel.
+                   Truco necesario para Excel: un <br> normal se ve bien en el
+                   navegador, pero Excel (que solo entiende esto como HTML/MHT)
+                   lo trata como fin de celda si no se le indica lo contrario.
+                   El atributo mso-data-placement="same-cell" es justamente esa
+                   indicación: "este salto de línea queda DENTRO de la celda".
+                   white-space:normal + vertical-align:top hacen que la celda
+                   se vea bien también si se abre en un navegador. */
+                $partes = array_filter(array_map('trim', explode(',', (string)$v)));
+                $html   = implode('<br mso-data-placement="same-cell">', array_map('htmlspecialchars', $partes));
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\';white-space:normal;vertical-align:top" valign="top">'
+                      . $html . '</td>';
             } else {
                 $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
                       . htmlspecialchars((string)$v) . '</td>';

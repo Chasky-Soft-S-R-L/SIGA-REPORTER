@@ -34,7 +34,7 @@ final class Labels
      * datos (viene del SQL) · valor = label visible.
      */
     public const COLUMNS = [
-
+      
         'CCOSTO_COD'          => 'CCOSTO_COD',
         'CCOSTO_NOMBRE'       => 'CCOSTO_NOMBRE',
         'ESTADO_CMN'          => 'ESTADO CMN',
@@ -105,7 +105,7 @@ final class Labels
         'CCOSTO_COD'          => 90,
         'CCOSTO_NOMBRE'       => 190,
         'ESTADO_CMN'          => 150,
-        'ESTADO_FASE'         => 110,
+        'ESTADO_FASE'         => 90,
         'NRO_LINEAS'          => 70,
         'PROGR_ANO_1'         => 90,
         'FF'                  => 30,
@@ -147,12 +147,11 @@ final class Labels
     ];
 
     /** Las 3 fases del gasto: clave interna → texto mostrado en chip/kanban/grupo. */
-    public const FASES = [
-        'PROGRAMADO' => 'PROGRAMADO',
-        'MODIFICADO' => 'MODIFICADO',
-        'EJECUTADO'  => 'EJECUTADO',
-    ];
-
+  public const FASES = [
+    'PROGRAMADO' => 'PROGRAMADO',
+    'MODIFICADO' => 'MODIFICADO',
+    'EJECUTADO'  => 'EJECUTADO',
+];
     /** Campos por los que se puede agrupar la tabla → texto largo (panel de campos). */
     public const GROUP_BY = [
         'ACTIV_OPERAT_COD' => 'Actividad operativa',
@@ -182,30 +181,12 @@ final class Labels
         'clasif'   => 'Clasificador + ítem',
     ];
 
-    /**
-     * Estado de línea del CMN: clave → [texto ABREVIADO, tooltip].
-     *
-     * ¡OJO CON LAS CLAVES! Deben coincidir EXACTAMENTE con el texto que emite
-     * el SQL en la columna ESTADO_CMN (ver el STUFF de CmnQuery::innerSql).
-     * El SQL emite: PROGRAMADO · INCLUIDO · EXCLUIDO · MODIFICADO.
-     *
-     * Antes aquí figuraba 'ANTIGUO' en vez de 'PROGRAMADO'. Como esa clave
-     * nunca llega, el mapeo no encontraba coincidencia y la celda mostraba el
-     * texto crudo completo ("PROGRAMADO, MOD") en lugar de la abreviatura
-     * ("PRG, -MOD"). Se conserva 'ANTIGUO' como alias por compatibilidad, por
-     * si algún dato viejo o algún otro reporte todavía lo usa.
-     *
-     * Estas abreviaturas las consumen los tres lados a la vez:
-     *   · la tabla web (cmnBadge / cmnTexto en index.php)
-     *   · el Excel     (ExportService::cmnAbrev)
-     *   · el grafo SVG (cmnBadgeSvg en index.php)
-     */
+    /** Estado de línea del CMN: clave → [texto corto, tooltip]. */
     public const CMN_ESTADO = [
-        'PROGRAMADO' => ['PRG',  'Ya venía en el cuadro base aprobado'],
-        'ANTIGUO'    => ['PRG',  'Ya venía en el cuadro base aprobado (alias antiguo)'],
-        'INCLUIDO'   => ['INC',  'Añadido después por modificación (I)'],
-        'EXCLUIDO'   => ['EXC',  'Alguna línea del ítem fue retirada (E)'],
-        'MODIFICADO' => ['-MOD', 'Cambió respecto del original: en servicios el monto, en bienes la cantidad'],
+        'ANTIGUO'    => ['PRG',    'Ya venía en el cuadro base aprobado'],
+        'INCLUIDO'   => ['INC',   'Añadido después por modificación (I)'],
+        'EXCLUIDO'   => ['EXC',   'Alguna línea del ítem fue retirada (E)'],
+        'MODIFICADO' => ['MOD', 'El importe vigente cambió respecto del original'],
     ];
 
     /** Textos del placeholder de los filtros multi-select. */

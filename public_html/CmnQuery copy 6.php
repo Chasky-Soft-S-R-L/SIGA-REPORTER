@@ -6,15 +6,9 @@
  *
  * COMPATIBLE PHP 7.4: sin match(), sin str_starts_with, sin tipos mixed.
  *
- * ESTADOS (3): Programado · Modificado · Ejecutado. Se clasifican así:
+ * ESTADOS (3): Programado · Modificado · Ejecutado. Se clasifican por montos:
  *   - Ejecutado  = tiene ejecución real  (IMPORTE_EJEC > 0)
- *   - Modificado = para SERVICIOS, el vigente difiere del original en MONTO
- *                  (IMPORTE_MOD <> IMPORTE_PROG); para BIENES, difiere en
- *                  CANTIDAD (CANTIDAD_MOD <> CANTIDAD_PROG). En un bien lo que
- *                  se modifica es la cantidad, no el precio: comparar por monto
- *                  marcaba MODIFICADO aunque solo cambiara el precio unitario.
- *                  Comparación "de la línea": directa CANTIDAD_MOD vs
- *                  CANTIDAD_PROG (ítem de una sola línea de clasificador).
+ *   - Modificado = el vigente difiere del original (IMPORTE_MOD <> IMPORTE_PROG)
  *   - Programado = el resto
  *
  * FILTRO EJECUTADO/NO EJECUTADO ($ejec): 'si' = solo ítems con IMPORTE_EJEC > 0
@@ -30,56 +24,6 @@
  *   SALDO_DEVENGAR = Ejecutado - Devengado                     ← ejecutado aún sin devengar
  *   (la columna Compromiso bruto = VALOR_DEPEND ya NO se expone: no interesa)
  *
- * ══════════════════════════════════════════════════════════════════════════════
- * CÓMO FUNCIONA LA CERTIFICACIÓN (CCP) · imprescindible para leer el bloque `ej`
- * ══════════════════════════════════════════════════════════════════════════════
- * El Certificado de Crédito Presupuestario es el acto que reserva el crédito
- * antes de comprometer el gasto (sin certificación no hay compra, sea cual sea
- * el monto). Cuatro hechos que condicionan este archivo, todos verificados
- * contra la base 104 y contra las guías del MEF:
- *
- * 1. UN CCP CUBRE MUCHAS LÍNEAS Y MUCHOS CENTROS. Al registrarlo se agregan
- *    varias metas + clasificadores dentro del MISMO certificado. Ejemplo real:
- *    la cert. 211/2024 reparte importes entre ~12 centros de costo distintos.
- *    → Por eso NUNCA se puede identificar "el certificado de un ítem" buscando
- *      por SEC_FUNC + CLASIFICADOR: ese era el bug del antiguo OUTER APPLY
- *      `cert` (mostraba certificados de otros ítems de la misma línea), y es un
- *      error CONCEPTUAL, no de join. El único vínculo fiable ítem→certificado
- *      pasa por la ORDEN (SIG_ORDEN_ADQUISICION.NRO_CERTIFICA).
- *
- * 2. DOS CORRELATIVOS PARA EL MISMO DOCUMENTO, RELACIÓN 1:1.
- *      · SIGA = NRO_CERTIFICA      (correlativo interno de logística)
- *      · SIAF = NRO_CERTIFICA_SIAF (correlativo del expediente en el MEF)
- *    El SIGA transmite el certificado a la plataforma SIAF web de forma
- *    individual y recibe de vuelta su número. Verificado 2022-2026: ninguna
- *    certificación tiene más de un NRO_CERTIFICA_SIAF distinto.
- *
- * 3. NRO_CERTIFICA SE REINICIA CADA AÑO. La cert. 211 de 2024 tiene SIAF 448;
- *    la 211 de 2025 tiene SIAF 327. Son documentos distintos.
- *    → El JOIN a SIG_CERTIFICACION DEBE llevar ANO_EJE además de NRO_CERTIFICA.
- *      Si alguien "simplifica" esa condición, la mitad de los badges mostrarán
- *      el SIAF de otro año.
- *
- * 4. LAS TABLAS DE DETALLE NO SIRVEN PARA ATRIBUIR EL CERTIFICADO A UNA FILA.
- *      · SIG_CERTIFICACION_FASE  → SECUENCIA_FASE es la ETAPA del trámite
- *        (Certificación, Compromiso Anual, y las secuencias de anulación /
- *        rebaja / ampliación), no una línea. Repite la misma línea una vez por
- *        fase y trae NRO_ORDEN vacío.
- *      · SIG_CERTIFICACION_PPTO  → llega a meta+clasificador, pero duplicada por
- *        fase; sumarla sin acotar la secuencia da importes al doble.
- *      · SIG_CERTIFICACION_DEPE  → llega a CENTRO_COSTO, pero TIPO_TAREA /
- *        NIVEL_TAREA / CODIGO_TAREA vienen VACÍOS y la tabla dejó de poblarse
- *        después de 2024 (17 725 filas, todas de ese año).
- *    → Conclusión: un ítem CERTIFICADO PERO SIN ORDEN no puede mostrar su
- *      certificado. Se queda en 'PENDIENTE', que es preferible a inventar uno.
- *
- * 5. ANULADO ES INDEPENDIENTE DEL ESTADO SIAF. ESTADO_CERTIFICA_SIAF = 3
- *    ("aprobado en el SIAF") concentra el 99 % de los casos, pero 575 de esas
- *    aprobadas están además ANULADO<>0. El estado 4 NO es "anulado" (26 de 27
- *    tienen ANULADO=0). Por eso el badge marca la anulación leyendo ANULADO,
- *    no el estado SIAF.
- * ══════════════════════════════════════════════════════════════════════════════
- *
  * NOTA SOBRE CANT_VIG / MNTO_VIG (fix POLLO BEBE, sec_cua_mod_sal con saldo 0):
  *   El vigente sale de COALESCE(NULLIF(MAX(s.CANT_TOTAL),0), SUM(det no excluido)).
  *   El NULLIF(...,0) es clave: SIG_CUADRO_MODIFICADO_SALDO a veces trae CANT_TOTAL=0
@@ -91,30 +35,18 @@
  *   "... = 0 THEN 0" sigue cubriendo el caso legítimo de todo-excluido → vigente 0.
  *
  * FIX DATOS_EJECUCION (ESTADO_ORDEN) · billing scope bug:
- *   El bloque `ej` (lista de órdenes tipo "OS 171 · DEVENGADO · Cert SIGA 211 ·
- *   SIAF 327" que se ve en la columna DATOS EJECUCION) antes hacía match SOLO por
- *   SEC_FUNC + CLASIFICADOR + ítem, vía SIG_ORDEN_ITEM_PPTO. Esa combinación NO
- *   identifica una fila única del cuadro: si el mismo ítem+meta+clasificador se usa
- *   en OTRA actividad operativa o en OTRO centro de costo (común con ítems genéricos
- *   como "servicio de mano de obra no calificada"), `ej` traía las órdenes de esas
+ *   El bloque `ej` (lista de órdenes tipo "OS 171 · DEVENGADO · Cert 211" que se
+ *   ve en la columna DATOS EJECUCION) antes hacía match SOLO por SEC_FUNC +
+ *   CLASIFICADOR + ítem, vía SIG_ORDEN_ITEM_PPTO. Esa combinación NO identifica
+ *   una fila única del cuadro: si el mismo ítem+meta+clasificador se usa en OTRA
+ *   actividad operativa o en OTRO centro de costo (común con ítems genéricos como
+ *   "servicio de mano de obra no calificada"), `ej` traía las órdenes de esas
  *   OTRAS actividades/centros también — la lista no coincidía con IMPORTE_EJEC/
  *   DEVENGADO de la fila (que sí están correctamente filtrados por centro+tarea
  *   vía `dev`/SIG_DEPEN_META_CUADRO). Se corrigió `ej` para que agregue por la
  *   MISMA clave que `dev` (centro + tarea + ítem, a través de
  *   SIG_CUADRO_ADQUISICION → SIG_DETALLE_BSERV_CUADRO → SIG_DEPEN_META_CUADRO)
  *   en vez de meta+clasificador+ítem.
- *
- * FIX CERTIFICADO INEXISTENTE (ESTADO_ORDEN):
- *   Antes, si el ítem no tenía órdenes propias (`ej` vacío), ESTADO_ORDEN caía
- *   a un OUTER APPLY `cert` que buscaba una certificación por SEC_FUNC +
- *   CLASIFICADOR (nivel de línea presupuestal, NO de ítem). Como una línea
- *   certifica varios ítems, mostraba "CERTIFICADO · Cert N" de un certificado
- *   que no pertenecía a ese ítem. Se eliminó ese fallback (y el OUTER APPLY
- *   `cert`, que quedó sin uso): ahora, sin órdenes propias, se muestra
- *   'PENDIENTE'. Ver el punto 1 y el punto 4 del bloque de certificación de
- *   arriba: no es un bug reparable, es que el dato no existe a nivel de ítem.
- *   La certificación real del ítem se ve en el expediente, ligada a las órdenes
- *   del ítem (ver historial()).
  */
 class CmnQuery
 {
@@ -209,30 +141,17 @@ class CmnQuery
             CASE WHEN D.TIPO_BIEN='S' THEN D.MNTO_TOTAL
                  ELSE D.PRECIO_UNIT END                             AS PRECIO_UNIT_MOD,
             D.MNTO_TOTAL                                            AS IMPORTE_MOD,
-            /* ESTADO_ORDEN: solo las órdenes reales del ítem (`ej`, acotado a
-               centro+tarea+ítem). Si el ítem no tiene órdenes propias → PENDIENTE.
-               Ya NO se usa el fallback de certificación por SEC_FUNC+CLASIFICADOR
-               (mostraba certificados de otros ítems de la misma línea). */
-            COALESCE(ej.ORDENES, 'PENDIENTE')                       AS ESTADO_ORDEN,
+            COALESCE(ej.ORDENES,
+                     CASE WHEN cert.NRO_CERTIFICA IS NOT NULL
+                          THEN 'CERTIFICADO · Cert ' + CONVERT(VARCHAR, cert.NRO_CERTIFICA)
+                          ELSE 'PENDIENTE' END)                 AS ESTADO_ORDEN,
             ISNULL(per.nombre_completo, '')                        AS RESPONSABLE,
             STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', PROGRAMADO' ELSE '' END
                   + CASE WHEN D.LIN_INCL  > 0 THEN ', INCLUIDO' ELSE '' END
                   + CASE WHEN D.LIN_EXCL  > 0 THEN ', EXCLUIDO' ELSE '' END
-                  /* MODIFICADO: servicios por MONTO, bienes por CANTIDAD. En un
-                     bien lo que se modifica es la cantidad, no el precio; comparar
-                     por monto marcaba MODIFICADO aunque solo variara el precio
-                     unitario. Comparación directa de la línea (ítem de una sola
-                     línea de clasificador). */
-                  + CASE
-                      WHEN D.TIPO_BIEN='S'
-                           AND ISNULL(ori.MNTO_TOTAL,0) > 0
-                           AND ABS(D.MNTO_TOTAL - ori.MNTO_TOTAL) > 0.005
-                      THEN ', MODIFICADO'
-                      WHEN D.TIPO_BIEN='B'
-                           AND ISNULL(ori.CANT_TOTAL,0) > 0
-                           AND ABS(D.CANT_TOTAL - ori.CANT_TOTAL) > 0.005
-                      THEN ', MODIFICADO'
-                      ELSE '' END
+                  + CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0
+                              AND ABS(D.MNTO_TOTAL - ori.MNTO_TOTAL) > 0.005
+                         THEN ', MODIFICADO' ELSE '' END
                   , 1, 2, '')                                       AS ESTADO_CMN,
             D.NRO_LINEAS                                            AS NRO_LINEAS,
             /* CANTIDAD_EJEC/PRECIO_UNIT_EJEC/IMPORTE_EJEC/DEVENGADO ya NO usan
@@ -371,6 +290,17 @@ class CmnQuery
               AND  n.GRUPO_BIEN=D.GRUPO_BIEN AND n.CLASE_BIEN=D.CLASE_BIEN
               AND  n.FAMILIA_BIEN=D.FAMILIA_BIEN AND n.ITEM_BIEN=D.ITEM_BIEN
         ) ori
+        OUTER APPLY (
+            SELECT TOP 1 cp.NRO_CERTIFICA
+            FROM   SIG_CERTIFICACION_PPTO cp
+            JOIN   SIG_CERTIFICACION c
+                   ON c.ANO_EJE=cp.ANO_EJE AND c.SEC_EJEC=cp.SEC_EJEC
+                  AND c.NRO_CERTIFICA=cp.NRO_CERTIFICA
+            WHERE  cp.SEC_EJEC=D.SEC_EJEC AND cp.ANO_EJE=D.ANNO_EJEC
+              AND  cp.SEC_FUNC=D.SEC_FUNC AND cp.CLASIFICADOR=D.CLASIFICADOR
+              AND  ISNULL(c.ANULADO,0)=0
+            ORDER BY cp.NRO_CERTIFICA DESC
+        ) cert
         /* RESPONSABLE: el empleado que figura en SIG_PAAC_CONSOLIDADO para el
            consolidado de esta fila del cuadro (vía SIG_CUADRO_MODIFICADO_CMN,
            que enlaza D.SEC_CUA_MOD_SAL con el consolidado). Un mismo consolidado
@@ -425,24 +355,8 @@ class CmnQuery
                                WHEN ISNULL(oa2.NRO_CERTIFICA,0) <> 0 THEN ' · CERTIFICADO'
                                ELSE ' · CON ORDEN'
                              END
-                           /* CERTIFICACIÓN · el MISMO documento tiene DOS correlativos:
-                                · SIGA = NRO_CERTIFICA      (correlativo interno de logística)
-                                · SIAF = NRO_CERTIFICA_SIAF (correlativo del expediente MEF)
-                              Se leen de la CABECERA (cab2) a propósito: las tablas de
-                              detalle (_FASE / _PPTO / _DEPE) repiten la misma línea una
-                              vez por FASE del trámite (Certificación, Compromiso Anual,
-                              anulación, rebaja, ampliación) y no bajan a nivel de ítem,
-                              así que unirse a ellas duplicaría filas sin ganar precisión.
-                              Ver el bloque CÓMO FUNCIONA LA CERTIFICACIÓN arriba.
-                              ANULADA: ANULADO es independiente de ESTADO_CERTIFICA_SIAF
-                              (hay 575 certificaciones aprobadas en el SIAF que están
-                              anuladas); por eso la marca se lee de ANULADO. */
                            + CASE WHEN ISNULL(oa2.NRO_CERTIFICA,0) <> 0
-                                  THEN ' · Cert SIGA ' + CONVERT(VARCHAR, oa2.NRO_CERTIFICA)
-                                       + ISNULL(' · SIAF ' + CONVERT(VARCHAR,
-                                           NULLIF(cab2.NRO_CERTIFICA_SIAF, 0)), '')
-                                       + CASE WHEN ISNULL(cab2.ANULADO,0) <> 0
-                                              THEN ' · CERT ANULADA' ELSE '' END
+                                  THEN ' · Cert ' + CONVERT(VARCHAR, oa2.NRO_CERTIFICA)
                                   ELSE '' END
                     FROM   SIG_CUADRO_ADQUISICION ca2
                     JOIN   SIG_DETALLE_BSERV_CUADRO db2
@@ -456,13 +370,6 @@ class CmnQuery
                            ON oa2.SEC_EJEC=ca2.SEC_EJEC AND oa2.ANO_EJE=ca2.ANO_EJE
                           AND oa2.NRO_ORDEN=ca2.NRO_ORDEN AND oa2.TIPO_BIEN=ca2.TIPO_BIEN
                           AND oa2.ESTADO<>'A'
-                    /* OJO: el JOIN lleva ANO_EJE ADEMÁS de NRO_CERTIFICA porque el
-                       correlativo SIGA se REINICIA CADA AÑO — la cert. 211 de 2024
-                       tiene SIAF 448 y la 211 de 2025 tiene SIAF 327. Sin el año,
-                       la mitad de los badges mostraría el SIAF de otro ejercicio. */
-                    LEFT JOIN SIG_CERTIFICACION cab2
-                           ON cab2.SEC_EJEC=oa2.SEC_EJEC AND cab2.ANO_EJE=oa2.ANO_EJE
-                          AND cab2.NRO_CERTIFICA=oa2.NRO_CERTIFICA
                     WHERE  ca2.SEC_EJEC=ca.SEC_EJEC AND ca2.ANO_EJE=ca.ANO_EJE AND ca2.ESTADO<>'A'
                       AND  dm2.CENTRO_COSTO=dm.CENTRO_COSTO
                       AND  dm2.TIPO_TAREA=dm.TIPO_TAREA AND dm2.NIVEL_TAREA=dm.NIVEL_TAREA
@@ -591,16 +498,9 @@ class CmnQuery
 
     private function faseExpr(string $t = 'T'): string
     {
-        /* MODIFICADO: servicios por MONTO, bienes por CANTIDAD (comparación
-           directa de la línea). En un bien lo que se modifica es la cantidad,
-           no el precio; comparar por monto marcaba MODIFICADO aunque solo
-           variara el precio unitario. */
         return "CASE
-                    WHEN {$t}.IMPORTE_EJEC > 0                                     THEN 'EJECUTADO'
-                    WHEN {$t}.TIPO_BIEN='S'
-                         AND ABS({$t}.IMPORTE_MOD  - {$t}.IMPORTE_PROG)  > 0.005   THEN 'MODIFICADO'
-                    WHEN {$t}.TIPO_BIEN='B'
-                         AND ABS({$t}.CANTIDAD_MOD - {$t}.CANTIDAD_PROG) > 0.005   THEN 'MODIFICADO'
+                    WHEN {$t}.IMPORTE_EJEC > 0                               THEN 'EJECUTADO'
+                    WHEN ABS({$t}.IMPORTE_MOD - {$t}.IMPORTE_PROG) > 0.005  THEN 'MODIFICADO'
                     ELSE 'PROGRAMADO'
                 END";
     }
@@ -808,14 +708,9 @@ class CmnQuery
            ítem (grupo/clase/familia/ítem), no las de toda la meta+clasificador
            (que agrupa decenas de ítems e inflaba el conteo a >100 certificaciones).
            Monto = comprometido del ítem en esa certificación (suma PREC_TOT_SOLES
-           de las órdenes de la cert para este ítem). Enlace por ÍTEM, robusto.
-
-           nro / nro_siaf = los DOS correlativos del mismo documento (SIGA interno
-           y SIAF del MEF, relación 1:1). El JOIN a SIG_CERTIFICACION ya lleva
-           ANO_EJE, imprescindible porque NRO_CERTIFICA se reinicia cada año. */
+           de las órdenes de la cert para este ítem). Enlace por ÍTEM, robusto. */
         $cert = $b(
             "SELECT oa.NRO_CERTIFICA nro,
-                    MAX(CONVERT(VARCHAR, NULLIF(cc.NRO_CERTIFICA_SIAF,0))) nro_siaf,
                     MAX(CONVERT(VARCHAR(10), cc.FECHA, 103)) fecha,
                     SUM(oi.PREC_TOT_SOLES) monto,
                     MAX(CASE WHEN ISNULL(cc.ANULADO,0)=0 THEN 'Vigente' ELSE 'Anulada' END) estado
@@ -941,12 +836,6 @@ class CmnQuery
                     + CONVERT(VARCHAR, ca.NRO_ORDEN))          AS orden,
                 MAX(ISNULL(ct.NOMBRE_PROV, '—'))               AS proveedor,
                 MAX(CONVERT(VARCHAR(10), oa.FECHA_ORDEN, 103)) AS fecha,
-                /* Certificación de la orden · los dos correlativos (SIGA / SIAF).
-                   El JOIN a SIG_CERTIFICACION lleva ANO_EJE porque NRO_CERTIFICA
-                   se reinicia cada ejercicio. */
-                MAX(NULLIF(oa.NRO_CERTIFICA,0))                AS nro_cert,
-                MAX(NULLIF(cab.NRO_CERTIFICA_SIAF,0))          AS nro_cert_siaf,
-                MAX(CASE WHEN ISNULL(cab.ANULADO,0)=0 THEN 0 ELSE 1 END) AS cert_anulada,
                 SUM(dm.MNTO_SOLES)                             AS ejecutado,
                 /* Devengado prorrateado: devengado real de la orden × (ejecutado de
                    esta línea / ejecutado total de la orden+ítem). SQL Server no admite
@@ -966,9 +855,6 @@ class CmnQuery
                    ON oa.SEC_EJEC=ca.SEC_EJEC AND oa.ANO_EJE=ca.ANO_EJE
                   AND oa.NRO_ORDEN=ca.NRO_ORDEN AND oa.TIPO_BIEN=ca.TIPO_BIEN
                   AND oa.ESTADO<>'A'
-            LEFT JOIN SIG_CERTIFICACION cab
-                   ON cab.SEC_EJEC=oa.SEC_EJEC AND cab.ANO_EJE=oa.ANO_EJE
-                  AND cab.NRO_CERTIFICA=oa.NRO_CERTIFICA
             LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
             /* Por fila: devengado real de la orden+ítem y ejecutado total de esa
                orden+ítem en TODOS los centros (denominador del prorrateo). */
@@ -1032,13 +918,12 @@ class CmnQuery
     /**
      * TRAZA GLOBAL DE UN ÍTEM · para el grafo-árbol de trazabilidad.
      * Devuelve TODAS las órdenes del ítem en la entidad (no filtra por centro),
-     * cada una con su certificación (SIGA + SIAF), expediente SIAF, estado y
-     * devengado. El enlace es por ÍTEM (grupo/clase/familia/ítem), nunca por
-     * CLASIFICADOR: el clasificador se guarda con espacios inconsistentes (p.ej.
-     * '2.3. 1  5. 1  2' con doble espacio) y romperia el match. Estructura de cada fila:
-     *   nro_certifica · nro_certifica_siaf · cert_anulada · orden (OC/OS n) ·
-     *   proveedor · fecha · exp_siaf · estado_siaf (0=sin compromiso, 2=comprometido) ·
-     *   comprometido · ejecutado · devengado · multa
+     * cada una con su certificación, expediente SIAF, estado y devengado. El enlace
+     * es por ÍTEM (grupo/clase/familia/ítem), nunca por CLASIFICADOR: el clasificador
+     * se guarda con espacios inconsistentes (p.ej. '2.3. 1  5. 1  2' con doble espacio)
+     * y romperia el match. Estructura de cada fila:
+     *   nro_certifica · orden (OC/OS n) · proveedor · fecha · exp_siaf ·
+     *   estado_siaf (0=sin compromiso, 2=comprometido) · comprometido · devengado
      * El front arma el árbol Certificación → Orden(es) → Devengado a partir de esto.
      *
      * NOTA: esta traza es DELIBERADAMENTE global (toda la entidad, sin filtrar
@@ -1053,10 +938,6 @@ class CmnQuery
         $sql = "
             SELECT
                 oa.NRO_CERTIFICA                                AS nro_certifica,
-                /* Correlativo SIAF del MISMO certificado (relación 1:1 con el SIGA).
-                   El JOIN lleva ANO_EJE: NRO_CERTIFICA se reinicia cada año. */
-                NULLIF(cab.NRO_CERTIFICA_SIAF, 0)               AS nro_certifica_siaf,
-                CASE WHEN ISNULL(cab.ANULADO,0)=0 THEN 0 ELSE 1 END AS cert_anulada,
                 CASE WHEN oa.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END
                     + CONVERT(VARCHAR, oa.NRO_ORDEN)            AS orden,
                 oa.NRO_ORDEN                                    AS nro_orden,
@@ -1128,9 +1009,6 @@ class CmnQuery
             ) oi
                    ON oi.SEC_EJEC=oa.SEC_EJEC AND oi.ANO_EJE=oa.ANO_EJE
                   AND oi.NRO_ORDEN=oa.NRO_ORDEN AND oi.TIPO_BIEN=oa.TIPO_BIEN
-            LEFT JOIN SIG_CERTIFICACION cab
-                   ON cab.SEC_EJEC=oa.SEC_EJEC AND cab.ANO_EJE=oa.ANO_EJE
-                  AND cab.NRO_CERTIFICA=oa.NRO_CERTIFICA
             LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
             WHERE  oa.SEC_EJEC=:sec AND oa.ANO_EJE=:ano AND oa.ESTADO<>'A'
               AND  oa.TIPO_BIEN=:tb
