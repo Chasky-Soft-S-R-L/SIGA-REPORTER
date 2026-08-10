@@ -104,7 +104,7 @@ final class Labels
     public const WIDTHS = [
         'CCOSTO_COD'          => 90,
         'CCOSTO_NOMBRE'       => 190,
-        'ESTADO_CMN'          => 150,
+        'ESTADO_CMN'          => 100,
         'ESTADO_FASE'         => 110,
         'NRO_LINEAS'          => 70,
         'PROGR_ANO_1'         => 90,

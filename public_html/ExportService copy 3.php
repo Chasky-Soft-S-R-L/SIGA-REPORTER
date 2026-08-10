@@ -16,29 +16,6 @@
  * Para renombrar una columna (o cambiar cuáles son numéricas/enteras),
  * edita SOLO column_labels.php — nunca este archivo.
  *
- * ══════════════════════════════════════════════════════════════════════════
- * UNA FILA POR ÍTEM · SIN SALTOS DE LÍNEA  (regla dura de este export)
- * ══════════════════════════════════════════════════════════════════════════
- * Cada ítem del cuadro DEBE ocupar exactamente una fila de la hoja. Tres cosas
- * lo rompían y las tres están resueltas aquí:
- *
- *   1. SALTOS DENTRO DEL DATO. Los nombres del SIGA a veces traen \r\n, tabs o
- *      dobles espacios. Excel los interpreta como fin de celda y parte el ítem
- *      en dos filas. unaLinea() los colapsa a un espacio simple ANTES de
- *      escribir la celda. También se declara `br{mso-data-placement:same-cell}`
- *      por si algún dato trae un <br> literal.
- *   2. AJUSTE DE TEXTO. Sin ancho declarado, Excel autoajusta y envuelve el
- *      texto largo, agrandando el alto de la fila. Ahora se emite un <colgroup>
- *      con el ancho de Labels::WIDTHS (la MISMA fuente que la tabla web) y
- *      `white-space:nowrap` en todas las celdas: el texto que no entra se
- *      RECORTA visualmente contra la columna vecina, igual que en pantalla.
- *      El dato sigue completo en la celda; solo se oculta lo que no cabe.
- *   3. DATOS EJECUCION DEMASIADO LARGO. Un ítem con 12 órdenes generaba una
- *      celda kilométrica que deformaba la grilla. resumenOrdenes() muestra las
- *      primeras MAX_ORDENES y resume el resto como "(+N más)". El detalle
- *      completo se consulta en el expediente de la pantalla, que es donde
- *      tiene sentido leerlo.
- *
  * ESTADO CMN (una sola celda, abreviado):
  *   El texto crudo trae varios estados separados por coma ("PROGRAMADO,
  *   MODIFICADO"). Antes se ponía uno por línea con <br mso-data-placement>,
@@ -71,23 +48,6 @@ class ExportService
     /** Columnas numéricas (para formateo/alineación). Alias de Labels::NUMERIC_COLUMNS. */
     public const NUM = Labels::NUMERIC_COLUMNS;
 
-    /**
-     * Cuántas órdenes se listan en DATOS EJECUCION antes de resumir el resto.
-     * Un ítem con muchas órdenes generaba una celda tan larga que deformaba la
-     * grilla; el listado completo vive en el expediente de la pantalla.
-     */
-    private const MAX_ORDENES = 3;
-
-    /**
-     * Corte duro de cualquier celda de texto. Es una red de seguridad contra
-     * datos anómalos (descripciones enormes pegadas en un campo corto); en
-     * operación normal ninguna columna llega a este límite.
-     */
-    private const MAX_TEXTO = 300;
-
-    /** Ancho por defecto (px) si una columna no está en Labels::WIDTHS. */
-    private const ANCHO_DEF = 90;
-
     /** Paleta de la vista web: [color fuerte, color claro] por actividad. */
     private const PALETA = [
         ['#059669','#ecfdf5'], ['#0284c7','#eff6ff'], ['#6d28d9','#f5f3ff'], ['#b45309','#fffbeb'],
@@ -98,9 +58,9 @@ class ExportService
      *  · Ejecutado=verde. Mismos valores que el frontend, para que el Excel
      *  se vea idéntico a la pantalla. */
     private const FASE_HEX = [
-        'PROGRAMADO' => ['#FFFF00', '#fefce8'],
-        'MODIFICADO' => ['#FFC000', '#fff7ed'],
-        'EJECUTADO'  => ['#47D359', '#ecfdf5'],
+        'PROGRAMADO' => ['#eab308', '#fefce8'],
+        'MODIFICADO' => ['#f97316', '#fff7ed'],
+        'EJECUTADO'  => ['#10b981', '#ecfdf5'],
     ];
 
     /** Qué columna pertenece a qué etapa (CANTIDAD/PRECIO_UNIT/IMPORTE de cada una). */
@@ -110,20 +70,6 @@ class ExportService
         'CANTIDAD_EJEC' => 'EJECUTADO',  'PRECIO_UNIT_EJEC' => 'EJECUTADO',  'IMPORTE_EJEC' => 'EJECUTADO',
     ];
 
-    /** Estilo de las celdas de DATO: una línea, sin autoajuste, recorte visual. */
-    private const NOWRAP = 'white-space:nowrap;vertical-align:middle;';
-
-    /**
-     * Estilo de las CABECERAS: al revés que los datos, el texto SÍ envuelve.
-     * Es el mismo criterio del frontend (`#thead th{white-space:normal;
-     * word-break:break-word;vertical-align:bottom}`): con nowrap, etiquetas
-     * largas como "IMPORTE CMN PROGRAMADO" se recortaban contra la columna
-     * vecina y en la hoja se leía "CANTIDAD RECIO UNITARIO TE CMN PROGRAMADO".
-     * Envolviendo a dos líneas el encabezado se lee completo sin ensanchar
-     * las columnas de dato.
-     */
-    private const WRAPHEAD = 'white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;';
-
     /** Color estable por código de actividad (mismo criterio que el frontend). */
     private static function actColor(string $cod): array
     {
@@ -132,79 +78,6 @@ class ExportService
             $h = ($h * 31 + ord($cod[$i])) % 4294967296;
         }
         return self::PALETA[$h % count(self::PALETA)];
-    }
-
-    /** Ancho declarado de una columna (px), desde Labels::WIDTHS. */
-    private static function ancho(string $key): int
-    {
-        return (int)(Labels::WIDTHS[$key] ?? self::ANCHO_DEF);
-    }
-
-    /**
-     * Normaliza cualquier texto a UNA sola línea.
-     * Los datos del SIGA traen \r\n, tabs y dobles espacios; Excel interpreta
-     * el salto como fin de celda y parte el ítem en dos filas. Esto lo colapsa
-     * todo a un espacio simple y recorta a MAX_TEXTO por seguridad.
-     */
-    private static function unaLinea($v): string
-    {
-        $s = (string)$v;
-        $s = str_replace(["\r\n", "\r", "\n", "\t", "\x0B", "\x0C"], ' ', $s);
-        $s = preg_replace('/\s{2,}/u', ' ', $s);
-        $s = trim((string)$s);
-        if (mb_strlen($s, 'UTF-8') > self::MAX_TEXTO) {
-            $s = mb_substr($s, 0, self::MAX_TEXTO - 1, 'UTF-8') . '…';
-        }
-        return $s;
-    }
-
-    /**
-     * DATOS EJECUCION resumido: las primeras MAX_ORDENES y el resto como
-     * "(+N más)". El texto viene de CmnQuery (bloque `ej`) con las órdenes
-     * separadas por coma y los tramos internos por " · ", p.ej.:
-     *   "OS 13 · DEVENGADO · Cert SIGA 12 · SIAF 56, OS 14 · DEVENGADO · …"
-     * Por eso el split es por coma, nunca por el punto medio.
-     */
-    private static function resumenOrdenes(string $crudo): string
-    {
-        $partes = array_values(array_filter(array_map('trim', explode(',', $crudo)), 'strlen'));
-        $n = count($partes);
-        if ($n === 0) return '';
-        if ($n <= self::MAX_ORDENES) return implode(', ', $partes);
-        return implode(', ', array_slice($partes, 0, self::MAX_ORDENES))
-             . '  (+' . ($n - self::MAX_ORDENES) . ' más)';
-    }
-
-    /**
-     * ESTADO de ejecución del ítem · TRES estados (antes eran dos).
-     *
-     *   Ejecutado → IMPORTE_EJEC > 0. Gana siempre: si el ítem llegó a
-     *               ejecutarse, eso es lo que ocurrió, aunque después alguna
-     *               línea se excluyera.
-     *   Excluido  → el ESTADO CMN trae EXCLUIDO **y** el vigente quedó en 0
-     *               (IMPORTE_MOD = 0). El ítem salió del cuadro: no está
-     *               "pendiente" de comprarse, ya no se va a comprar.
-     *   Pendiente → el resto: sigue vigente y aún sin ejecución.
-     *
-     * OJO CON LA SEGUNDA CONDICIÓN: un ítem puede tener EXCLUIDO en el ESTADO
-     * CMN por una exclusión PARCIAL (se retiró una línea del cuadro pero el
-     * ítem sigue vigente con importe > 0). Ese caso NO es Excluido — sigue
-     * siendo Pendiente, porque todavía se puede comprar. Por eso no basta con
-     * mirar el texto del ESTADO CMN: hace falta que el vigente sea 0.
-     *
-     * Esta función es la ÚNICA fuente del estado: la usan el Excel (celdasItem),
-     * el PDF y también index.php antes de exportar. El equivalente en JS vive
-     * en index.php (estadoEjecTxt) con la misma lógica, para que pantalla y
-     * archivo nunca digan cosas distintas.
-     */
-    public static function estadoEjec(array $r): string
-    {
-        if ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) return 'Ejecutado';
-        $cmn = mb_strtoupper((string)($r['ESTADO_CMN'] ?? ''), 'UTF-8');
-        if (strpos($cmn, 'EXCLUIDO') !== false && (float)($r['IMPORTE_MOD'] ?? 0) <= 0.005) {
-            return 'Excluido';
-        }
-        return 'Pendiente';
     }
 
     /**
@@ -300,8 +173,7 @@ class ExportService
     {
         $keys = array_keys(self::HEADERS);
         $idx  = self::idxImportes();
-        $out  = '<tr><td colspan="' . $idx . '" style="' . self::NOWRAP . $lblStyle . '">'
-              . htmlspecialchars(self::unaLinea($label)) . '</td>';
+        $out  = '<tr><td colspan="' . $idx . '" style="' . $lblStyle . '">' . htmlspecialchars($label) . '</td>';
         for ($i = $idx, $n = count($keys); $i < $n; $i++) {
             $k = $keys[$i];
             $v = ($k === 'IMPORTE_PROG') ? $t['prog']
@@ -311,8 +183,8 @@ class ExportService
                : (($k === 'DEVENGADO')    ? $t['dev']
                : (($k === 'SALDO_DEVENGAR') ? $t['saldo'] : null)))));
             $out .= $v === null
-                ? '<td style="' . self::NOWRAP . $tdStyle . '"></td>'
-                : '<td style="' . self::NOWRAP . $tdStyle . 'mso-number-format:\'#,##0.00\';text-align:right">'
+                ? '<td style="' . $tdStyle . '"></td>'
+                : '<td style="' . $tdStyle . 'mso-number-format:\'#,##0.00\';text-align:right">'
                   . number_format($v, 2, '.', '') . '</td>';
         }
         return $out . '</tr>';
@@ -320,8 +192,7 @@ class ExportService
 
     /** Celdas de una fila de ítem. Las columnas de Programado/Modificado/Ejecutado
      *  usan su tinte de fase (amarillo/naranja/verde claro) en vez del color de
-     *  actividad, igual que en pantalla. Toda celda de texto pasa por unaLinea()
-     *  para garantizar que el ítem ocupe UNA sola fila de la hoja. */
+     *  actividad, igual que en pantalla. */
     private static function celdasItem(array $r, string $bg): string
     {
         $out = '';
@@ -329,49 +200,40 @@ class ExportService
             $v      = $r[$key] ?? '';
             $fase   = self::COLFASE[$key] ?? null;
             $cellBg = $fase ? self::FASE_HEX[$fase][1] : $bg;
-            $base   = self::NOWRAP . 'background:' . $cellBg . ';';
             if (in_array($key, self::INT, true)) {
-                $out .= '<td style="' . $base . 'mso-number-format:\'0\';text-align:right">'
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'0\';text-align:right">'
                       . (int)$v . '</td>';
             } elseif (in_array($key, self::NUM, true)) {
-                $out .= '<td style="' . $base . 'mso-number-format:\'#,##0.00\';text-align:right">'
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'#,##0.00\';text-align:right">'
                       . number_format((float)$v, 2, '.', '') . '</td>';
             } elseif ($key === 'ESTADO_EJEC') {
-                // TRES estados, cada uno con su color:
-                //   Ejecutado → azul   (ya se compró)
-                //   Pendiente → negro  (vigente, aún sin comprar)
-                //   Excluido  → gris   (salió del cuadro, ya no se va a comprar)
-                // Se recalcula con estadoEjec() en vez de confiar en el valor
-                // que traiga la fila, para que el Excel diga lo mismo aunque se
-                // exporte desde otro punto del sistema.
-                $texto = self::estadoEjec($r);
-                $color = ($texto === 'Ejecutado') ? '#0000FF'
-                       : (($texto === 'Excluido') ? '#7F7F7F' : '#000000');
-                $out .= '<td style="' . $base . 'mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
+                // "Ejecutado" en azul y negrita · "Pendiente" en negrita (negro),
+                // igual que en la hoja de referencia del área usuaria. La
+                // comparación de estado usa el texto original (por si cambia
+                // de mayúsc/minúsc en el futuro); solo lo que se IMPRIME va en
+                // mayúsculas.
+                $texto = (string)$v;
+                $esEjecutado = strcasecmp($texto, 'Ejecutado') === 0;
+                $color = $esEjecutado ? '#0000FF' : '#000000';
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
                       . htmlspecialchars(mb_strtoupper($texto, 'UTF-8')) . '</td>';
             } elseif ($key === 'ESTADO_FASE') {
                 // FASE DE EJECUCIÓN (SIAF): Certificado / Comprometido / Devengado
                 // (la última alcanzada). Vacío si aún no llegó a ninguna. Distinta
                 // del ESTADO CMN. Se deriva de los datos reales de la fila, no del
                 // valor crudo Programado/Modificado/Ejecutado del SQL.
-                $out .= '<td style="' . $base . 'mso-number-format:\'@\'">'
-                      . htmlspecialchars(self::faseEjecucion($r)) . '</td>';
+                $texto = self::faseEjecucion($r);
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
+                      . htmlspecialchars($texto) . '</td>';
             } elseif ($key === 'ESTADO_CMN') {
                 // UNA sola celda, UNA sola línea, separado por comas y ABREVIADO
                 // (PRG / INC / EXC / -MOD). El <br> anterior partía el ítem en 2
                 // filas en varias versiones de Excel; por eso se eliminó.
-                $out .= '<td style="' . $base . 'mso-number-format:\'@\'">'
-                      . htmlspecialchars(self::cmnAbrev(self::unaLinea($v))) . '</td>';
-            } elseif ($key === 'ESTADO_ORDEN') {
-                // DATOS EJECUCION: se listan las primeras MAX_ORDENES y el resto
-                // se resume como "(+N más)". Con el ancho declarado en el
-                // <colgroup> + nowrap, lo que no entra queda oculto contra la
-                // columna vecina en vez de envolver y agrandar la fila.
-                $out .= '<td style="' . $base . 'mso-number-format:\'@\'">'
-                      . htmlspecialchars(self::resumenOrdenes(self::unaLinea($v))) . '</td>';
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
+                      . htmlspecialchars(self::cmnAbrev((string)$v)) . '</td>';
             } else {
-                $out .= '<td style="' . $base . 'mso-number-format:\'@\'">'
-                      . htmlspecialchars(self::unaLinea($v)) . '</td>';
+                $out .= '<td style="background:' . $cellBg . ';mso-number-format:\'@\'">'
+                      . htmlspecialchars((string)$v) . '</td>';
             }
         }
         return $out;
@@ -414,22 +276,6 @@ class ExportService
            . 'xmlns:x="urn:schemas-microsoft-com:office:excel" '
            . 'xmlns="http://www.w3.org/TR/REC-html40">';
         echo '<head><meta charset="UTF-8">';
-        /* ── Una fila por ítem ──
-           · td{white-space:nowrap} → Excel NO autoajusta ni envuelve el dato: lo
-             recorta contra la columna vecina, igual que la tabla web.
-           · th{white-space:normal} → las CABECERAS sí envuelven, como en el
-             frontend. Con nowrap, "IMPORTE CMN PROGRAMADO" se cortaba y la hoja
-             mostraba "CANTIDAD RECIO UNITARIO TE CMN PROGRAMADO".
-           · br{mso-data-placement:same-cell} → si algún dato trae un <br>
-             literal, Excel lo deja DENTRO de la celda en vez de cortar la fila.
-           · mso-number-format:'@' en cada celda de texto evita que Excel
-             reinterprete códigos como números o fechas (los clasificadores
-             tipo "2.3.2 9.1 1" y los códigos de ítem con ceros a la izquierda). */
-        echo '<style>'
-           . 'td{white-space:nowrap;vertical-align:middle;mso-rotate:0}'
-           . 'th{white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15}'
-           . 'br{mso-data-placement:same-cell}'
-           . '</style>';
         echo '<!--[if gte mso 9]><xml>'
            . '<x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>'
            . '<x:Name>CMN</x:Name>'
@@ -448,27 +294,14 @@ class ExportService
            . '</xml><![endif]-->';
         echo '</head><body>';
 
-        echo '<table border="0" cellspacing="0" cellpadding="3" style="table-layout:fixed">';
-
-        /* ── Anchos de columna ──
-           Se declaran explícitamente desde Labels::WIDTHS (la MISMA fuente que
-           usa la tabla web), para que el Excel salga con las columnas ya
-           dimensionadas y el texto largo quede recortado en vez de envuelto.
-           Para cambiar un ancho: edita column_labels.php, no este archivo. */
-        echo '<colgroup>';
-        foreach (self::HEADERS as $key => $_) {
-            echo '<col width="' . self::ancho($key) . '" style="width:' . self::ancho($key) . 'px">';
-        }
-        echo '</colgroup>';
+        echo '<table border="0" cellspacing="0" cellpadding="3">';
 
         // ── Cabecera institucional ──
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:15px;font-weight:bold;color:#14967d">'
-           . htmlspecialchars(self::unaLinea($titulo)) . '</td></tr>';
-        // El centro ya viene con el responsable del área anexado desde index.php
-        // ("104.07.03.01 · OFICINA … · Resp.: BAUTISTA MELENDEZ VICTOR MANUEL").
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:11px;color:#334155">'
-           . htmlspecialchars(self::unaLinea($centro)) . '</td></tr>';
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:9px;color:#64748b">Generado: '
+        echo '<tr><td colspan="' . $nCols . '" style="font-size:15px;font-weight:bold;color:#14967d">'
+           . htmlspecialchars($titulo) . '</td></tr>';
+        echo '<tr><td colspan="' . $nCols . '" style="font-size:11px;color:#334155">'
+           . htmlspecialchars($centro) . '</td></tr>';
+        echo '<tr><td colspan="' . $nCols . '" style="font-size:9px;color:#64748b">Generado: '
            . date('d/m/Y H:i') . '</td></tr>';
         echo '<tr><td colspan="' . $nCols . '"></td></tr>';
 
@@ -483,9 +316,8 @@ class ExportService
             $bgH    = $fase ? self::FASE_HEX[$fase][0] : '#1abb9c';
             $colH   = $fase ? '#1e3a8a' : '#fff';
             $border = $fase ? $bgH : '#0f766e';
-            echo '<th style="' . self::WRAPHEAD . 'background:' . $bgH . ';color:' . $colH
-               . ';font-weight:bold;border:1px solid ' . $border . ';text-align:' . $al . '">'
-               . htmlspecialchars(self::unaLinea($label)) . '</th>';
+            echo '<th style="background:' . $bgH . ';color:' . $colH . ';font-weight:bold;border:1px solid ' . $border . ';text-align:' . $al . '">'
+               . htmlspecialchars($label) . '</th>';
         }
         echo '</tr>';
 
@@ -508,9 +340,9 @@ class ExportService
                 [$fuerte, $claro] = self::actColor((string)$act);
                 $lbl = self::grupoLabel($items, $by, (string)$act);
                 // Cabecera del bloque
-                echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'background:' . $fuerte
+                echo '<tr><td colspan="' . $nCols . '" style="background:' . $fuerte
                    . ';color:#fff;font-weight:bold;font-size:11px">'
-                   . htmlspecialchars(self::unaLinea($lbl)) . '   ·   ' . count($items) . ' ítems</td></tr>';
+                   . htmlspecialchars($lbl) . '   ·   ' . count($items) . ' ítems</td></tr>';
                 // Ítems del bloque
                 foreach ($items as $r) {
                     echo '<tr>' . self::celdasItem($r, $claro) . '</tr>';
@@ -571,8 +403,8 @@ class ExportService
                 $g[$k] = [
                     'ff'    => $ffrb,
                     'meta'  => str_pad((string)($r['META'] ?? ''), 4, '0', STR_PAD_LEFT),
-                    'clas'  => self::unaLinea(($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? '')),
-                    'area'  => self::unaLinea(($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? '')),
+                    'clas'  => ($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? ''),
+                    'area'  => ($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? ''),
                     'prog'  => 0.0,
                     'ejec'  => 0.0,
                     'saldo' => 0.0,
@@ -633,12 +465,9 @@ class ExportService
             .yr{text-align:center;font-size:9px;margin:0 0 8px}
             .meta{font-size:8.5px;margin:1px 0}
             .flt{display:flex;justify-content:space-between;font-size:8.5px;margin:6px 0 3px;border-top:1px solid #94a3b8;border-bottom:1px solid #94a3b8;padding:3px 0}
-            table{width:100%;border-collapse:collapse;margin-top:2px;table-layout:fixed}
-            th,td{border:1px solid #94a3b8;padding:3px 5px;vertical-align:middle}
-            /* Una línea por fila: el texto que no entra se recorta con "…" en vez
-               de envolver y descuadrar la altura de la tabla impresa. */
-            td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-            th{background:#f1f5f9;font-size:8.5px;text-align:center;white-space:normal;word-break:break-word}
+            table{width:100%;border-collapse:collapse;margin-top:2px}
+            th,td{border:1px solid #94a3b8;padding:3px 5px;vertical-align:top}
+            th{background:#f1f5f9;font-size:8.5px;text-align:center}
             td.num,th.num{text-align:right}
             tfoot td{font-weight:bold;background:#f8fafc}
             .pendTitulo{background:#1f2937;color:#fff;font-weight:bold;font-size:9.5px;padding:5px 7px;margin-top:16px;
@@ -654,10 +483,9 @@ class ExportService
            . '</div><div style="text-align:right">Fecha: ' . date('d/m/Y') . '<br>Hora: ' . date('H:i') . '</div></div>';
         echo '<h2>EJECUCIÓN POR ÁREA USUARIA</h2>';
         echo '<p class="yr">Año : ' . htmlspecialchars((string)$anio) . '</p>';
-        if ($entidad) echo '<p class="meta"><b>UNIDAD EJECUTORA</b> : ' . htmlspecialchars(self::unaLinea($entidad)) . '</p>';
+        if ($entidad) echo '<p class="meta"><b>UNIDAD EJECUTORA</b> : ' . htmlspecialchars($entidad) . '</p>';
         echo '<div class="flt"><span>FF/Rb : Todos</span><span>Tipo de Meta : Todos</span><span>Clasificador de Gasto : Todos</span></div>';
-        // $centro ya trae el responsable del área anexado desde index.php.
-        echo '<p class="meta"><b>Área Usuaria</b> : ' . htmlspecialchars(self::unaLinea($centro)) . '</p>';
+        echo '<p class="meta"><b>Área Usuaria</b> : ' . htmlspecialchars($centro) . '</p>';
 
         // Consolidar por FF + Meta + Clasificador + Área (como el reporte oficial):
         // una sola fila por combinación, sumando el compromiso ejecutado.
@@ -671,8 +499,8 @@ class ExportService
                 $grupos[$k] = [
                     'ff'    => $ffrb,
                     'meta'  => str_pad((string)($r['META'] ?? ''), 4, '0', STR_PAD_LEFT),
-                    'clas'  => self::unaLinea(($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? '')),
-                    'area'  => self::unaLinea(($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? '')),
+                    'clas'  => ($r['CLASIF_COD'] ?? '') . '  ' . ($r['CLASIF_NOMBRE'] ?? ''),
+                    'area'  => ($r['CCOSTO_COD'] ?? '') . ' ' . ($r['CCOSTO_NOMBRE'] ?? ''),
                     'comp'  => 0.0,
                 ];
             }
@@ -690,9 +518,9 @@ class ExportService
         foreach ($grupos as $g) {
             echo '<tr>'
                . '<td>' . htmlspecialchars($g['ff']) . '</td>'
-               . '<td title="' . htmlspecialchars($g['meta']) . '">' . htmlspecialchars($g['meta']) . '</td>'
-               . '<td title="' . htmlspecialchars($g['clas']) . '">' . htmlspecialchars($g['clas']) . '</td>'
-               . '<td title="' . htmlspecialchars($g['area']) . '">' . htmlspecialchars($g['area']) . '</td>'
+               . '<td>' . htmlspecialchars($g['meta']) . '</td>'
+               . '<td>' . htmlspecialchars($g['clas']) . '</td>'
+               . '<td>' . htmlspecialchars($g['area']) . '</td>'
                . '<td class="num">' . number_format($g['comp'], 2) . '</td>'
                . '</tr>';
         }
@@ -723,9 +551,9 @@ class ExportService
                 $neg = $s['saldo'] < -0.005;
                 echo '<tr' . ($neg ? ' style="background:#fef2f2"' : '') . '>'
                    . '<td>' . htmlspecialchars($s['ff']) . '</td>'
-                   . '<td title="' . htmlspecialchars($s['meta']) . '">' . htmlspecialchars($s['meta']) . '</td>'
-                   . '<td title="' . htmlspecialchars($s['clas']) . '">' . htmlspecialchars($s['clas']) . '</td>'
-                   . '<td title="' . htmlspecialchars($s['area']) . '">' . htmlspecialchars($s['area']) . '</td>'
+                   . '<td>' . htmlspecialchars($s['meta']) . '</td>'
+                   . '<td>' . htmlspecialchars($s['clas']) . '</td>'
+                   . '<td>' . htmlspecialchars($s['area']) . '</td>'
                    . '<td class="num">' . number_format($s['prog'], 2) . '</td>'
                    . '<td class="num">' . number_format($s['ejec'], 2) . '</td>'
                    . '<td class="num" style="' . ($neg ? 'color:#b91c1c;font-weight:bold' : '') . '">' . number_format($s['saldo'], 2) . '</td>'

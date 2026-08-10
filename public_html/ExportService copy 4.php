@@ -176,38 +176,6 @@ class ExportService
     }
 
     /**
-     * ESTADO de ejecución del ítem · TRES estados (antes eran dos).
-     *
-     *   Ejecutado → IMPORTE_EJEC > 0. Gana siempre: si el ítem llegó a
-     *               ejecutarse, eso es lo que ocurrió, aunque después alguna
-     *               línea se excluyera.
-     *   Excluido  → el ESTADO CMN trae EXCLUIDO **y** el vigente quedó en 0
-     *               (IMPORTE_MOD = 0). El ítem salió del cuadro: no está
-     *               "pendiente" de comprarse, ya no se va a comprar.
-     *   Pendiente → el resto: sigue vigente y aún sin ejecución.
-     *
-     * OJO CON LA SEGUNDA CONDICIÓN: un ítem puede tener EXCLUIDO en el ESTADO
-     * CMN por una exclusión PARCIAL (se retiró una línea del cuadro pero el
-     * ítem sigue vigente con importe > 0). Ese caso NO es Excluido — sigue
-     * siendo Pendiente, porque todavía se puede comprar. Por eso no basta con
-     * mirar el texto del ESTADO CMN: hace falta que el vigente sea 0.
-     *
-     * Esta función es la ÚNICA fuente del estado: la usan el Excel (celdasItem),
-     * el PDF y también index.php antes de exportar. El equivalente en JS vive
-     * en index.php (estadoEjecTxt) con la misma lógica, para que pantalla y
-     * archivo nunca digan cosas distintas.
-     */
-    public static function estadoEjec(array $r): string
-    {
-        if ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) return 'Ejecutado';
-        $cmn = mb_strtoupper((string)($r['ESTADO_CMN'] ?? ''), 'UTF-8');
-        if (strpos($cmn, 'EXCLUIDO') !== false && (float)($r['IMPORTE_MOD'] ?? 0) <= 0.005) {
-            return 'Excluido';
-        }
-        return 'Pendiente';
-    }
-
-    /**
      * Fase de EJECUCIÓN (SIAF) de una fila: CERTIFICADO / COMPROMETIDO /
      * DEVENGADO — la última fase alcanzada. Vacío si el ítem aún no llegó a
      * ninguna. Distinta del ESTADO CMN (Programado/Modificado/Incluido/Excluido).
@@ -337,18 +305,16 @@ class ExportService
                 $out .= '<td style="' . $base . 'mso-number-format:\'#,##0.00\';text-align:right">'
                       . number_format((float)$v, 2, '.', '') . '</td>';
             } elseif ($key === 'ESTADO_EJEC') {
-                // TRES estados, cada uno con su color:
-                //   Ejecutado → azul   (ya se compró)
-                //   Pendiente → negro  (vigente, aún sin comprar)
-                //   Excluido  → gris   (salió del cuadro, ya no se va a comprar)
-                // Se recalcula con estadoEjec() en vez de confiar en el valor
-                // que traiga la fila, para que el Excel diga lo mismo aunque se
-                // exporte desde otro punto del sistema.
-                $texto = self::estadoEjec($r);
-                $color = ($texto === 'Ejecutado') ? '#0000FF'
-                       : (($texto === 'Excluido') ? '#7F7F7F' : '#000000');
+                // "Ejecutado" en azul y negrita · "Pendiente" en negrita (negro),
+                // igual que en la hoja de referencia del área usuaria. La
+                // comparación de estado usa el texto original (por si cambia
+                // de mayúsc/minúsc en el futuro); solo lo que se IMPRIME va en
+                // mayúsculas.
+                $texto = (string)$v;
+                $esEjecutado = strcasecmp($texto, 'Ejecutado') === 0;
+                $color = $esEjecutado ? '#0000FF' : '#000000';
                 $out .= '<td style="' . $base . 'mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
-                      . htmlspecialchars(mb_strtoupper($texto, 'UTF-8')) . '</td>';
+                      . htmlspecialchars(mb_strtoupper(self::unaLinea($texto), 'UTF-8')) . '</td>';
             } elseif ($key === 'ESTADO_FASE') {
                 // FASE DE EJECUCIÓN (SIAF): Certificado / Comprometido / Devengado
                 // (la última alcanzada). Vacío si aún no llegó a ninguna. Distinta
@@ -638,7 +604,7 @@ class ExportService
             /* Una línea por fila: el texto que no entra se recorta con "…" en vez
                de envolver y descuadrar la altura de la tabla impresa. */
             td{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-            th{background:#f1f5f9;font-size:8.5px;text-align:center;white-space:normal;word-break:break-word}
+            th{background:#f1f5f9;font-size:8.5px;text-align:center;white-space:nowrap}
             td.num,th.num{text-align:right}
             tfoot td{font-weight:bold;background:#f8fafc}
             .pendTitulo{background:#1f2937;color:#fff;font-weight:bold;font-size:9.5px;padding:5px 7px;margin-top:16px;
@@ -709,7 +675,7 @@ class ExportService
         // Saldo = Programado - Ejecutado. Incluye TODOS los grupos, también
         // los sobregirados (Saldo negativo, resaltado en rojo).
         if ($saldos) {
-            echo '<div class="pendTitulo">📊 DIFERENCIA (PROGRAMADO − EJECUTADO) POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
+            echo '<div class="pendTitulo">DIFERENCIA (PROGRAMADO − EJECUTADO) POR FF/Rb · META · CLASIFICADOR · ÁREA</div>';
             echo '<table class="pendTabla"><thead><tr>'
                . '<th style="width:5%">FF/Rb</th>'
                . '<th style="width:16%">Meta</th>'

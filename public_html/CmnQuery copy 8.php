@@ -142,25 +142,15 @@ class CmnQuery
         return ($v === false || $v === null) ? null : (int)$v;
     }
 
-    /**
-     * Lista de centros de costo con datos, para el combo de navegación.
-     * Incluye el RESPONSABLE del centro (el jefe formal, SIG_CENTRO_COSTO.EMPLEADO
-     * resuelto contra SIG_PERSONAL). OJO: es distinto de la columna RESPONSABLE de
-     * la tabla, que es por FILA (el empleado del consolidado PAAC de ese ítem).
-     * Unos 64 de 317 centros no tienen jefe asignado (órganos colegiados como la
-     * Asamblea o el Consejo Universitario): ahí llega cadena vacía, nunca NULL.
-     */
+    /** Lista de centros de costo con datos, para el combo de navegación. */
     public function centros(int $anioProg, int $anioEjec, int $secEjec): array
     {
         $st = $this->db->prepare(
-            "SELECT DISTINCT D.CENTRO_COSTO AS cod, cc.NOMBRE_DEPEND AS nombre,
-                    ISNULL(per.nombre_completo, '') AS responsable
+            "SELECT DISTINCT D.CENTRO_COSTO AS cod, cc.NOMBRE_DEPEND AS nombre
              FROM   SIG_CUADRO_MODIFICADO_DET D
              JOIN   SIG_CENTRO_COSTO cc
                     ON cc.SEC_EJEC=D.SEC_EJEC AND cc.ANO_EJE=D.ANNO_EJEC
                    AND cc.CENTRO_COSTO=D.CENTRO_COSTO
-             LEFT JOIN SIG_PERSONAL per
-                    ON per.sec_ejec=cc.SEC_EJEC AND per.empleado=cc.EMPLEADO
              WHERE  D.ANNO_PROG=? AND D.ANNO_EJEC=? AND D.SEC_EJEC=?
                AND  ISNULL(D.ESTADO,'') NOT IN ('E','ET')
              ORDER BY D.CENTRO_COSTO"
@@ -169,68 +159,9 @@ class CmnQuery
         return $st->fetchAll();
     }
 
-    /**
-     * PESO DE CADA FUENTE DE FINANCIAMIENTO EN UNA ORDEN+ÍTEM.
-     *
-     * POR QUÉ EXISTE: una misma línea del cuadro (centro + tarea + ítem) puede
-     * estar programada con DOS fuentes distintas — en 2026 hay 240 grupos así.
-     * La cadena de ejecución (SIG_CUADRO_ADQUISICION → SIG_DETALLE_BSERV_CUADRO
-     * → SIG_DEPEN_META_CUADRO) NO lleva fuente, así que `dev` y `ej` agregaban
-     * por centro+tarea+ítem y las DOS filas del cuadro recibían la ejecución
-     * COMPLETA: los totales salían al doble y la fila sin programación aparecía
-     * como sobregiro fantasma (p.ej. ítem 071100381505 del centro
-     * 104.07.08.03.01: 45 200 ejecutados se contaban dos veces = 90 400).
-     *
-     * DE DÓNDE SALE LA FUENTE: SIG_ORDEN_ITEM_PPTO es la ÚNICA tabla de la
-     * cadena que tiene FUENTE_FINANC. Se une a SIG_ORDEN_ITEM por SEC_ITEM
-     * (imprescindible: sin SEC_ITEM el join es un producto cartesiano — una
-     * orden de 47 ítems multiplica por 47) para bajar a los códigos de ítem.
-     *
-     * QUÉ DEVUELVE: una fila por (orden, ítem, fuente) con PESO = proporción
-     * del monto de esa fuente sobre el total de la orden+ítem. En las 998
-     * órdenes de fuente única el peso es 1.0 y el resultado es idéntico al de
-     * antes; en las 60 órdenes con dos fuentes reparte proporcionalmente. Si
-     * todos los montos son 0 (dato sin poblar) reparte en partes iguales entre
-     * las fuentes presentes, en vez de anular la ejecución.
-     *
-     * OJO: NO se une a SIG_CUADRO_ADQUISICION aquí. Esa tabla abre por
-     * SEC_CUADRO y multiplicaría las filas; como el peso es un cociente daría
-     * igual, pero el importe intermedio se vería inflado y confunde al depurar.
-     */
-    private function fuenteWeightSql(): string
-    {
-        return "
-            SELECT w.SEC_EJEC, w.ANO_EJE, w.NRO_ORDEN, w.TIPO_BIEN,
-                   w.GRUPO_BIEN, w.CLASE_BIEN, w.FAMILIA_BIEN, w.ITEM_BIEN,
-                   w.FUENTE_FINANC,
-                   CASE WHEN w.MNTO_TOT > 0 THEN w.MNTO_FF / w.MNTO_TOT
-                        ELSE 1.0 / NULLIF(w.N_FF, 0) END AS PESO
-            FROM (
-                SELECT oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
-                       oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN,
-                       oip.FUENTE_FINANC,
-                       SUM(oip.MNTO_SOLES) AS MNTO_FF,
-                       SUM(SUM(oip.MNTO_SOLES)) OVER (PARTITION BY
-                            oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
-                            oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN) AS MNTO_TOT,
-                       COUNT(*) OVER (PARTITION BY
-                            oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
-                            oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN) AS N_FF
-                FROM   SIG_ORDEN_ITEM_PPTO oip
-                JOIN   SIG_ORDEN_ITEM oi
-                       ON oi.SEC_EJEC=oip.SEC_EJEC AND oi.ANO_EJE=oip.ANO_EJE
-                      AND oi.NRO_ORDEN=oip.NRO_ORDEN AND oi.TIPO_BIEN=oip.TIPO_BIEN
-                      AND oi.SEC_ITEM=oip.SEC_ITEM
-                GROUP BY oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
-                         oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN,
-                         oip.FUENTE_FINANC
-            ) w";
-    }
-
     /** SQL interno del reporte (sin ORDER BY ni paginado), reutilizable. */
     private function innerSql(bool $withCC): string
     {
-        $ffw = $this->fuenteWeightSql();
         $filtroCC = $withCC ? " AND d.CENTRO_COSTO = :ccosto " : "";
         return "
         SELECT
@@ -344,13 +275,11 @@ class CmnQuery
             /* SALDO_DEVENGAR = Ejecutado - Devengado  (ejecutado aún sin devengar). */
             ISNULL(dev.MNTO_EJEC, 0) - ISNULL(dev.MNTO_DEVREAL, 0)  AS SALDO_DEVENGAR,
             /* GRUPOS_TI: cuántas líneas del cuadro (mismo centro+actividad+ítem,
-               distinto clasificador O DISTINTA FUENTE) comparten este ítem.
-               La partición NO incluye FUENTE_FINANC, pero la subconsulta D sí
-               agrupa por fuente: por eso GRUPOS_TI = 2 delata las líneas
-               multi-fuente (240 grupos en 2026). Fue el detector de que `dev`
-               y `ej` duplicaban la ejecución; con el peso por fuente ya
-               corregido, queda como dato informativo — pero sigue siendo la
-               forma rápida de encontrar estos casos al depurar. */
+               distinto clasificador) comparten este mismo ítem. Ya NO indica un
+               problema de cálculo (eso se resolvió arriba) — es solo informativo,
+               por si el frontend quiere mostrar este ítem también se programó
+               con otro clasificador en esta actividad, sin implicar que los
+               números sean inexactos. */
             D.GRUPOS_TI                                            AS GRUPOS_TI
         FROM (
             SELECT SEC_EJEC, ANNO_PROG, ANNO_EJEC, FUENTE_FINANC, TIPO_BIEN, CENTRO_COSTO,
@@ -478,10 +407,6 @@ class CmnQuery
                 ca.SEC_EJEC, ca.ANO_EJE,
                 dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                 db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                /* La lista de órdenes también se separa POR FUENTE: si no, las
-                   dos filas del cuadro (misma línea, distinto RB) mostraban las
-                   mismas órdenes repetidas en DATOS EJECUCION. */
-                ffw.FUENTE_FINANC,
                 STUFF((
                     SELECT DISTINCT ', ' + CASE WHEN oa2.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END
                            + CONVERT(VARCHAR, oa2.NRO_ORDEN)
@@ -538,14 +463,6 @@ class CmnQuery
                     LEFT JOIN SIG_CERTIFICACION cab2
                            ON cab2.SEC_EJEC=oa2.SEC_EJEC AND cab2.ANO_EJE=oa2.ANO_EJE
                           AND cab2.NRO_CERTIFICA=oa2.NRO_CERTIFICA
-                    /* Solo las órdenes imputadas a la MISMA fuente que la fila
-                       del cuadro (ffw viene del FROM externo: correlación). */
-                    JOIN ({$ffw}) ffw2
-                           ON ffw2.SEC_EJEC=oa2.SEC_EJEC AND ffw2.ANO_EJE=oa2.ANO_EJE
-                          AND ffw2.NRO_ORDEN=oa2.NRO_ORDEN AND ffw2.TIPO_BIEN=oa2.TIPO_BIEN
-                          AND ffw2.GRUPO_BIEN=db2.GRUPO_BIEN AND ffw2.CLASE_BIEN=db2.CLASE_BIEN
-                          AND ffw2.FAMILIA_BIEN=db2.FAMILIA_BIEN AND ffw2.ITEM_BIEN=db2.ITEM_BIEN
-                          AND ffw2.FUENTE_FINANC=ffw.FUENTE_FINANC
                     WHERE  ca2.SEC_EJEC=ca.SEC_EJEC AND ca2.ANO_EJE=ca.ANO_EJE AND ca2.ESTADO<>'A'
                       AND  dm2.CENTRO_COSTO=dm.CENTRO_COSTO
                       AND  dm2.TIPO_TAREA=dm.TIPO_TAREA AND dm2.NIVEL_TAREA=dm.NIVEL_TAREA
@@ -562,11 +479,6 @@ class CmnQuery
                    ON dm.SEC_EJEC=db.SEC_EJEC AND dm.ANO_EJE=db.ANO_EJE
                   AND dm.TIPO_BIEN=db.TIPO_BIEN AND dm.SEC_CUADRO=db.SEC_CUADRO
                   AND dm.SECUENCIA=db.SECUENCIA
-            JOIN ({$ffw}) ffw
-                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
-                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
-                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
-                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
             WHERE  ca.ESTADO<>'A'
               AND  EXISTS (
                     SELECT 1 FROM SIG_ORDEN_ADQUISICION oa
@@ -576,8 +488,7 @@ class CmnQuery
               )
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
-                     db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     ffw.FUENTE_FINANC
+                     db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN
         ) ej
              ON ej.SEC_EJEC     = D.SEC_EJEC
             AND ej.ANO_EJE      = D.ANNO_PROG
@@ -588,9 +499,6 @@ class CmnQuery
             AND ej.TIPO_BIEN    = D.TIPO_BIEN  AND ej.GRUPO_BIEN=D.GRUPO_BIEN
             AND ej.CLASE_BIEN   = D.CLASE_BIEN AND ej.FAMILIA_BIEN=D.FAMILIA_BIEN
             AND ej.ITEM_BIEN    = D.ITEM_BIEN
-            /* FUENTE: D.FUENTE_FINANC es el RB detallado (09/00), que es lo que
-               guarda SIG_ORDEN_ITEM_PPTO — NO el FF agregado (1/2) de la vista. */
-            AND ej.FUENTE_FINANC = D.FUENTE_FINANC
         LEFT JOIN (
             /* Cadena de EJECUCIÓN del cuadro (compromiso ejecutado = dm.MNTO_SOLES),
                con el DEVENGADO CONTABLE real (SIG_DEVENGADO) traído aparte por orden.
@@ -599,14 +507,9 @@ class CmnQuery
                 ca.SEC_EJEC, ca.ANO_EJE,
                 dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                 db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                /* FUENTE + PESO: la cadena de ejecución no lleva fuente, así que
-                   sin esto las dos filas del cuadro (mismo centro+tarea+ítem,
-                   distinto RB) se llevaban la ejecución COMPLETA cada una y los
-                   totales salían al doble. Ver fuenteWeightSql(). */
-                ffw.FUENTE_FINANC,
-                SUM(dm.CANT_DEPEND * ffw.PESO)          AS CANT_DEV,
-                SUM(dm.MNTO_SOLES  * ffw.PESO)          AS MNTO_EJEC,     -- compromiso ejecutado
-                SUM(dm.VALOR_DEPEND * ffw.PESO)         AS MNTO_COMP,     -- compromiso bruto (ya no se expone)
+                SUM(dm.CANT_DEPEND)                     AS CANT_DEV,
+                SUM(dm.MNTO_SOLES)                      AS MNTO_EJEC,     -- compromiso ejecutado
+                SUM(dm.VALOR_DEPEND)                    AS MNTO_COMP,     -- compromiso bruto (ya no se expone)
                 /* DEVENGADO por línea = devengado real de la orden PRORRATEADO por la
                    proporción del ejecutado de esta línea sobre el ejecutado total de la
                    orden+ítem. El devengado del SIGA vive a nivel de ORDEN (no por
@@ -620,7 +523,7 @@ class CmnQuery
                    real y el ejecutado total de la orden se calculan por fila en el
                    OUTER APPLY dvf, y aquí sólo se prorratea dentro del SUM. */
                 SUM(CASE WHEN dvf.EJEC_TOT_ORDEN > 0
-                         THEN dm.MNTO_SOLES * ffw.PESO * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
+                         THEN dm.MNTO_SOLES * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
                          ELSE 0 END)                    AS MNTO_DEVREAL
             FROM   SIG_CUADRO_ADQUISICION ca
             JOIN   SIG_DETALLE_BSERV_CUADRO db
@@ -630,16 +533,6 @@ class CmnQuery
                    ON dm.SEC_EJEC=db.SEC_EJEC AND dm.ANO_EJE=db.ANO_EJE
                   AND dm.TIPO_BIEN=db.TIPO_BIEN AND dm.SEC_CUADRO=db.SEC_CUADRO
                   AND dm.SECUENCIA=db.SECUENCIA
-            /* Peso de la fuente de esta fila del cuadro en la orden+ítem. El
-               denominador del prorrateo del devengado (dvf.EJEC_TOT_ORDEN) se
-               deja SIN ponderar a propósito: es el ejecutado total de la orden
-               en todas las fuentes y centros, y al ponderar solo el numerador
-               cada fuente se lleva exactamente su parte. */
-            JOIN ({$ffw}) ffw
-                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
-                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
-                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
-                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
             /* Por fila: devengado real de la orden+ítem (a nivel de orden completa) y
                ejecutado total de esa orden+ítem en TODOS los centros (denominador del
                prorrateo). Ambos escalares, resueltos aquí para no meter subquery en el SUM. */
@@ -683,8 +576,7 @@ class CmnQuery
               )
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
-                     db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     ffw.FUENTE_FINANC
+                     db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN
         ) dev
              ON dev.SEC_EJEC     = D.SEC_EJEC
             AND dev.ANO_EJE      = D.ANNO_PROG
@@ -694,11 +586,7 @@ class CmnQuery
             AND dev.CODIGO_TAREA = D.CODIGO_TAREA
             AND dev.TIPO_BIEN    = D.TIPO_BIEN  AND dev.GRUPO_BIEN=D.GRUPO_BIEN
             AND dev.CLASE_BIEN   = D.CLASE_BIEN AND dev.FAMILIA_BIEN=D.FAMILIA_BIEN
-            AND dev.ITEM_BIEN    = D.ITEM_BIEN
-            /* FUENTE: contra el RB detallado (D.FUENTE_FINANC), no contra el FF
-               agregado. Sin esta condición, las 240 líneas multi-fuente de 2026
-               contaban su ejecución dos veces. */
-            AND dev.FUENTE_FINANC = D.FUENTE_FINANC";
+            AND dev.ITEM_BIEN    = D.ITEM_BIEN";
     }
 
     private function faseExpr(string $t = 'T'): string
@@ -988,13 +876,8 @@ class CmnQuery
              FROM SIG_ORDEN_ADQUISICION oa
              JOIN SIG_ORDEN_ITEM oi ON oi.SEC_EJEC=oa.SEC_EJEC AND oi.ANO_EJE=oa.ANO_EJE
                   AND oi.NRO_ORDEN=oa.NRO_ORDEN AND oi.TIPO_BIEN=oa.TIPO_BIEN
-             /* SEC_ITEM es OBLIGATORIO: SIG_ORDEN_ITEM_PPTO tiene una fila por
-                ítem de la orden, así que sin él el join es un producto cartesiano
-                (una orden de 47 ítems de la misma meta+clasificador multiplicaba
-                por 47; la OS 398 del ítem 071100381505 salía 2 veces). */
              JOIN SIG_ORDEN_ITEM_PPTO oip ON oip.SEC_EJEC=oa.SEC_EJEC AND oip.ANO_EJE=oa.ANO_EJE
                   AND oip.NRO_ORDEN=oa.NRO_ORDEN AND oip.TIPO_BIEN=oa.TIPO_BIEN
-                  AND oip.SEC_ITEM=oi.SEC_ITEM
                   AND oip.SEC_FUNC=? AND oip.CLASIFICADOR=?
              LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
              WHERE oa.SEC_EJEC=? AND oa.ANO_EJE=? AND oa.ESTADO<>'A'
@@ -1010,10 +893,8 @@ class CmnQuery
              FROM SIG_ORDEN_ADQUISICION oa
              JOIN SIG_ORDEN_ITEM oi ON oi.SEC_EJEC=oa.SEC_EJEC AND oi.ANO_EJE=oa.ANO_EJE
                   AND oi.NRO_ORDEN=oa.NRO_ORDEN AND oi.TIPO_BIEN=oa.TIPO_BIEN
-             /* SEC_ITEM obligatorio (ver nota en la consulta de órdenes). */
              JOIN SIG_ORDEN_ITEM_PPTO oip ON oip.SEC_EJEC=oa.SEC_EJEC AND oip.ANO_EJE=oa.ANO_EJE
                   AND oip.NRO_ORDEN=oa.NRO_ORDEN AND oip.TIPO_BIEN=oa.TIPO_BIEN
-                  AND oip.SEC_ITEM=oi.SEC_ITEM
                   AND oip.SEC_FUNC=? AND oip.CLASIFICADOR=?
              WHERE oa.SEC_EJEC=? AND oa.ANO_EJE=? AND ISNULL(oa.EXP_SIAF,0)<>0 AND oa.ESTADO<>'A'
                AND oi.TIPO_BIEN=? AND oi.GRUPO_BIEN=? AND oi.CLASE_BIEN=? AND oi.FAMILIA_BIEN=? AND oi.ITEM_BIEN=?
@@ -1025,17 +906,10 @@ class CmnQuery
              JOIN SIG_DEVENGADO_ITEM di ON di.SEC_EJEC=dv.SEC_EJEC AND di.ANO_EJE=dv.ANO_EJE AND di.NRO_DEVENGADO=dv.NRO_DEVENGADO
              JOIN SIG_ORDEN_ADQUISICION oa2 ON oa2.SEC_EJEC=dv.SEC_EJEC AND oa2.ANO_EJE=dv.ANO_EJE
                   AND oa2.NRO_ORDEN=dv.NRO_ORDEN AND oa2.TIPO_BIEN=dv.TIPO_BIEN AND oa2.ESTADO<>'A'
-             /* Aquí no hay SIG_ORDEN_ITEM (el ítem viene de SIG_DEVENGADO_ITEM),
-                así que no se puede unir por SEC_ITEM. Se usa EXISTS en vez de
-                JOIN: filtra igual por meta+clasificador pero NO multiplica las
-                filas del devengado por cada ítem de la orden. */
-             WHERE EXISTS (
-                    SELECT 1 FROM SIG_ORDEN_ITEM_PPTO oip2
-                    WHERE oip2.SEC_EJEC=oa2.SEC_EJEC AND oip2.ANO_EJE=oa2.ANO_EJE
-                      AND oip2.NRO_ORDEN=oa2.NRO_ORDEN AND oip2.TIPO_BIEN=oa2.TIPO_BIEN
-                      AND oip2.SEC_FUNC=? AND oip2.CLASIFICADOR=?
-             )
-               AND dv.SEC_EJEC=? AND dv.ANO_EJE=?
+             JOIN SIG_ORDEN_ITEM_PPTO oip2 ON oip2.SEC_EJEC=oa2.SEC_EJEC AND oip2.ANO_EJE=oa2.ANO_EJE
+                  AND oip2.NRO_ORDEN=oa2.NRO_ORDEN AND oip2.TIPO_BIEN=oa2.TIPO_BIEN
+                  AND oip2.SEC_FUNC=? AND oip2.CLASIFICADOR=?
+             WHERE dv.SEC_EJEC=? AND dv.ANO_EJE=?
                AND di.TIPO_BIEN=? AND di.GRUPO_BIEN=? AND di.CLASE_BIEN=? AND di.FAMILIA_BIEN=? AND di.ITEM_BIEN=?",
             [$secFunc,$clasificador,$secEjec,$anioProg,$tipo,$g,$c,$f,$it,
              $secFunc,$clasificador,$secEjec,$anioProg,$tipo,$g,$c,$f,$it]
@@ -1058,14 +932,8 @@ class CmnQuery
      */
     public function ordenesItem(int $anioEjec, int $secEjec, string $ccosto,
                                 string $tipo, string $g, string $c, string $f, string $it,
-                                int $tipoTarea, string $nivelTarea, int $codigoTarea,
-                                string $fuente = ''): array
+                                int $tipoTarea, string $nivelTarea, int $codigoTarea): array
     {
-        /* $fuente = RB detallado (09/00) de la fila del cuadro. Si viene vacío
-           (llamada antigua) NO se filtra y se mantiene el comportamiento previo,
-           pero en líneas multi-fuente el modal mostrará las órdenes de ambas. */
-        $ffw     = $this->fuenteWeightSql();
-        $filtroFF = $fuente !== '' ? " AND ffw.FUENTE_FINANC = :ff " : "";
         $sql = "
             SELECT
                 ca.NRO_ORDEN                                   AS nro,
@@ -1079,15 +947,12 @@ class CmnQuery
                 MAX(NULLIF(oa.NRO_CERTIFICA,0))                AS nro_cert,
                 MAX(NULLIF(cab.NRO_CERTIFICA_SIAF,0))          AS nro_cert_siaf,
                 MAX(CASE WHEN ISNULL(cab.ANULADO,0)=0 THEN 0 ELSE 1 END) AS cert_anulada,
-                /* Ponderado por la fuente de la fila del cuadro, igual que `dev`
-                   en innerSql — si no, las dos filas multi-fuente mostrarían el
-                   mismo importe completo y no cuadrarían con la tabla. */
-                SUM(dm.MNTO_SOLES * ffw.PESO)                  AS ejecutado,
+                SUM(dm.MNTO_SOLES)                             AS ejecutado,
                 /* Devengado prorrateado: devengado real de la orden × (ejecutado de
                    esta línea / ejecutado total de la orden+ítem). SQL Server no admite
                    SUM(...subquery...): los escalares se resuelven por fila en dvf. */
                 SUM(CASE WHEN dvf.EJEC_TOT_ORDEN > 0
-                         THEN dm.MNTO_SOLES * ffw.PESO * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
+                         THEN dm.MNTO_SOLES * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
                          ELSE 0 END)                          AS devengado
             FROM   SIG_CUADRO_ADQUISICION ca
             JOIN   SIG_DETALLE_BSERV_CUADRO db
@@ -1104,12 +969,6 @@ class CmnQuery
             LEFT JOIN SIG_CERTIFICACION cab
                    ON cab.SEC_EJEC=oa.SEC_EJEC AND cab.ANO_EJE=oa.ANO_EJE
                   AND cab.NRO_CERTIFICA=oa.NRO_CERTIFICA
-            JOIN ({$ffw}) ffw
-                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
-                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
-                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
-                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
-                  {$filtroFF}
             LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
             /* Por fila: devengado real de la orden+ítem y ejecutado total de esa
                orden+ítem en TODOS los centros (denominador del prorrateo). */
@@ -1158,7 +1017,6 @@ class CmnQuery
         $st->bindValue(':tb', $tipo);
         $st->bindValue(':g',  $g);  $st->bindValue(':c',  $c);
         $st->bindValue(':f',  $f);  $st->bindValue(':it', $it);
-        if ($fuente !== '') $st->bindValue(':ff', $fuente);
         $st->execute();
         $rows = $st->fetchAll();
         foreach ($rows as &$r) {

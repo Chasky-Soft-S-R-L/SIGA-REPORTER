@@ -142,25 +142,15 @@ class CmnQuery
         return ($v === false || $v === null) ? null : (int)$v;
     }
 
-    /**
-     * Lista de centros de costo con datos, para el combo de navegación.
-     * Incluye el RESPONSABLE del centro (el jefe formal, SIG_CENTRO_COSTO.EMPLEADO
-     * resuelto contra SIG_PERSONAL). OJO: es distinto de la columna RESPONSABLE de
-     * la tabla, que es por FILA (el empleado del consolidado PAAC de ese ítem).
-     * Unos 64 de 317 centros no tienen jefe asignado (órganos colegiados como la
-     * Asamblea o el Consejo Universitario): ahí llega cadena vacía, nunca NULL.
-     */
+    /** Lista de centros de costo con datos, para el combo de navegación. */
     public function centros(int $anioProg, int $anioEjec, int $secEjec): array
     {
         $st = $this->db->prepare(
-            "SELECT DISTINCT D.CENTRO_COSTO AS cod, cc.NOMBRE_DEPEND AS nombre,
-                    ISNULL(per.nombre_completo, '') AS responsable
+            "SELECT DISTINCT D.CENTRO_COSTO AS cod, cc.NOMBRE_DEPEND AS nombre
              FROM   SIG_CUADRO_MODIFICADO_DET D
              JOIN   SIG_CENTRO_COSTO cc
                     ON cc.SEC_EJEC=D.SEC_EJEC AND cc.ANO_EJE=D.ANNO_EJEC
                    AND cc.CENTRO_COSTO=D.CENTRO_COSTO
-             LEFT JOIN SIG_PERSONAL per
-                    ON per.sec_ejec=cc.SEC_EJEC AND per.empleado=cc.EMPLEADO
              WHERE  D.ANNO_PROG=? AND D.ANNO_EJEC=? AND D.SEC_EJEC=?
                AND  ISNULL(D.ESTADO,'') NOT IN ('E','ET')
              ORDER BY D.CENTRO_COSTO"

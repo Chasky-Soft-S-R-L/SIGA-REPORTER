@@ -93,26 +93,16 @@ if ($export === 'excel' || $export === 'pdf') {
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
     $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente,$fEjec)['rows'];
-    // Estado de ejecución por ítem (Ejecutado / Pendiente / Excluido), igual que
-    // en pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista
-    // web. La lógica vive en ExportService::estadoEjec (única fuente).
+    // Estado de ejecución por ítem (Pendiente / Ejecutado), igual que en
+    // pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista web.
     foreach ($all as &$r) {
-        $r['ESTADO_EJEC'] = ExportService::estadoEjec($r);
+        $r['ESTADO_EJEC'] = ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) ? 'Ejecutado' : 'Pendiente';
     }
     unset($r);
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
     // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
     $ccNom = 'TODOS LOS CENTROS';
-    if ($ccosto) {
-        foreach ($q->centros($anioProg,$anioEjec,SEC_EJEC) as $c) {
-            if ($c['cod']===$ccosto) {
-                $ccNom = $c['cod'].'  ·  '.$c['nombre'];
-                // Responsable del centro (jefe formal), si lo tiene asignado.
-                if (($c['responsable'] ?? '') !== '') $ccNom .= '  ·  Resp.: '.$c['responsable'];
-                break;
-            }
-        }
-    }
+    if ($ccosto) { foreach ($q->centros($anioProg,$anioEjec,SEC_EJEC) as $c) { if ($c['cod']===$ccosto) { $ccNom = $c['cod'].'  ·  '.$c['nombre']; break; } } }
     // Campo de agrupación elegido en pantalla (groupBy). Vacío = sin agrupar.
     $gBy = (string)($_GET['groupby'] ?? '');
     $agrupaOn = ($_GET['agrupar'] ?? '1') !== '0' && $gBy !== '';
@@ -215,8 +205,7 @@ $opts      = $q->opciones($anioProg,$anioEjec,SEC_EJEC,$ccosto);
 $jsonLbl   = Labels::toJs();  // única fuente de verdad: columnas, fases, agrupado, orden, estado CMN
 $jsonCent  = json_encode($centros, JSON_UNESCAPED_UNICODE|JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP);
 $ccostoNombre='';
-$ccostoResp='';
-foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  ·  '.$c['nombre'];$ccostoResp=(string)($c['responsable']??'');break;} }
+foreach ($centros as $c){ if($c['cod']===$ccosto){$ccostoNombre=$c['cod'].'  ·  '.$c['nombre'];break;} }
 
 /* ---- Variables de los partials ---- */
 $ANIO   = $anioProg;      // año para sidebar y accesos
@@ -225,14 +214,7 @@ $PAGINA = 'cmn';          // clave en partials/nav.php
 $TITULO_PAG = "CMN {$anioProg} · Tabla / Kanban";
 
 $TITULO    = 'Cuadro de Necesidades <span class="text-primary">· '.$anioProg.'</span>';
-/* Responsable del centro (jefe formal). Solo se pinta si el centro está elegido
-   y tiene jefe asignado: 64 de 317 centros no lo tienen (órganos colegiados). */
-$RESP_HTML = ($ccosto && $ccostoResp !== '')
-    ? ' · <span class="inline-flex items-center gap-1 text-gray-600" title="Responsable del centro de costo">'
-      .'<i class="fa-solid fa-user-tie text-[11px] text-primary"></i>'
-      .'<span class="font-semibold">'.htmlspecialchars($ccostoResp).'</span></span>'
-    : '';
-$SUBTITULO = '(ejecución '.$anioEjec.') · <span id="totLbl">…</span>'.$RESP_HTML;
+$SUBTITULO = '(ejecución '.$anioEjec.') · <span id="totLbl">…</span>';
 $ACCIONES  = '
         <div class="inline-flex rounded-lg border border-gray-300 overflow-hidden text-sm" id="modeSwitch">
           <button data-mode="table" class="px-3 py-2 font-medium">Tabla</button>
@@ -403,11 +385,6 @@ include __DIR__ . '/partials/head.php';
   <i class="fa-solid fa-table-list"></i>
   <span class="text-[13px] font-bold">Cuadro de Necesidades <?= $anioProg ?></span>
   <span id="fsCentro" class="text-[11px] opacity-90 truncate"><?= htmlspecialchars($ccostoNombre ?: 'Todos los centros') ?></span>
-  <?php if ($ccosto && $ccostoResp !== ''): ?>
-  <span class="text-[11px] opacity-90 whitespace-nowrap hidden md:inline" title="Responsable del centro de costo">
-    <i class="fa-solid fa-user-tie mr-1"></i><?= htmlspecialchars($ccostoResp) ?>
-  </span>
-  <?php endif; ?>
   <span id="fsTot" class="text-[11px] opacity-90 ml-auto whitespace-nowrap"></span>
   <button id="fsExit" class="px-2.5 py-1 rounded text-[11px] font-semibold" style="background:rgba(255,255,255,.2)">
     <i class="fa-solid fa-compress mr-1"></i> Salir
@@ -594,12 +571,7 @@ include __DIR__ . '/partials/accesos.php'; ?>
 (function(){const centros=<?= $jsonCent ?>;const box=document.getElementById('ccBox'),s=document.getElementById('ccSearch'),v=document.getElementById('ccValue'),l=document.getElementById('ccList'),cl=document.getElementById('ccClear'),fm=s.closest('form');
 const nz=x=>(x||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'');const ec=x=>(x||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function pt(t,q){if(!q)return ec(t);const nt=nz(t),nq=nz(q);let o='',i=0,x;while((x=nt.indexOf(nq,i))!==-1){o+=ec(t.slice(i,x))+'<mark class="bg-primary/20 text-primary-dark rounded px-0.5">'+ec(t.slice(x,x+q.length))+'</mark>';i=x+q.length;if(!nq.length)break;}return o+ec(t.slice(i));}
-function rd(q){const nq=nz(q),m=centros.filter(c=>nz(c.cod+' '+c.nombre+' '+(c.responsable||'')).includes(nq)).slice(0,60);l.innerHTML='';const a=document.createElement('li');a.className='px-3 py-2 cursor-pointer hover:bg-primary/5 text-gray-500 border-b';a.textContent='— Todos los centros —';a.onclick=()=>pk('','');l.appendChild(a);m.forEach(c=>{const li=document.createElement('li');li.className='px-3 py-2 cursor-pointer hover:bg-primary/5';
-/* Segunda línea con el responsable del centro. 64 de 317 centros no tienen jefe
-   asignado (órganos colegiados): en esos no se pinta nada, sin dejar hueco. */
-li.innerHTML='<b class="text-gray-700">'+pt(c.cod,q)+'</b> <span class="text-gray-500">· '+pt(c.nombre,q)+'</span>'
-  +(c.responsable?'<span class="block text-[11px] text-gray-400 truncate"><i class="fa-solid fa-user-tie mr-1"></i>'+pt(c.responsable,q)+'</span>':'');
-li.onclick=()=>pk(c.cod,c.cod+'  ·  '+c.nombre);l.appendChild(li);});l.classList.remove('hidden');}
+function rd(q){const nq=nz(q),m=centros.filter(c=>nz(c.cod+' '+c.nombre).includes(nq)).slice(0,60);l.innerHTML='';const a=document.createElement('li');a.className='px-3 py-2 cursor-pointer hover:bg-primary/5 text-gray-500 border-b';a.textContent='— Todos los centros —';a.onclick=()=>pk('','');l.appendChild(a);m.forEach(c=>{const li=document.createElement('li');li.className='px-3 py-2 cursor-pointer hover:bg-primary/5';li.innerHTML='<b class="text-gray-700">'+pt(c.cod,q)+'</b> <span class="text-gray-500">· '+pt(c.nombre,q)+'</span>';li.onclick=()=>pk(c.cod,c.cod+'  ·  '+c.nombre);l.appendChild(li);});l.classList.remove('hidden');}
 function pk(cod,lab){v.value=cod;s.value=cod?lab:'';l.classList.add('hidden');cl.classList.toggle('hidden',!cod);fm.submit();}
 s.addEventListener('input',()=>rd(s.value));s.addEventListener('focus',()=>rd(s.value));cl.addEventListener('click',()=>pk('',''));document.addEventListener('click',e=>{if(!box.contains(e.target))l.classList.add('hidden');});
 /* acceso rápido: enfocar el buscador de centro */
@@ -643,24 +615,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     let t='SIGA '+siga+(siaf?' · SIAF '+siaf:'');
     if(+anulada)t+=' · ANULADA';
     return t;
-  }
-
-  /* ESTADO de ejecución del ítem · TRES estados. Espejo exacto de
-     ExportService::estadoEjec (PHP) — si cambia uno, cambia el otro.
-       Ejecutado → IMPORTE_EJEC > 0. Gana siempre: si llegó a ejecutarse, eso
-                   es lo que pasó, aunque después alguna línea se excluyera.
-       Excluido  → ESTADO_CMN trae EXCLUIDO **y** el vigente (IMPORTE_MOD)
-                   quedó en 0. El ítem salió del cuadro; no está pendiente de
-                   comprarse, ya no se va a comprar. Antes estos aparecían como
-                   "Pendiente", lo que inflaba la lectura de lo que falta.
-       Pendiente → el resto: vigente y aún sin ejecución.
-     La exclusión PARCIAL (línea retirada pero ítem aún vigente con importe > 0)
-     NO cuenta como Excluido: por eso se exige que el vigente sea 0. */
-  function estadoEjecTxt(d){
-    if((+d.IMPORTE_EJEC||0)>0.005) return 'Ejecutado';
-    const cmn=(d.ESTADO_CMN||'').toString().toUpperCase();
-    if(cmn.indexOf('EXCLUIDO')!==-1 && (+d.IMPORTE_MOD||0)<=0.005) return 'Excluido';
-    return 'Pendiente';
   }
 
   /* FASE DE EJECUCIÓN (SIAF) que se MUESTRA en la columna FASE de la tabla:
@@ -1083,23 +1037,11 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden" title="'+ec(d[k])+'"><div class="flex gap-1 overflow-hidden whitespace-nowrap">'+badge(d[k])+'</div></td>';
         }
         if(k==='ESTADO_EJEC'){
-          /* TRES estados:
-               Ejecutado (verde)  → IMPORTE_EJEC > 0. Gana siempre.
-               Excluido  (gris)   → el ESTADO CMN trae EXCLUIDO **y** el vigente
-                                    quedó en 0. El ítem salió del cuadro: no está
-                                    pendiente de comprarse, ya no se va a comprar.
-               Pendiente (rojo)   → el resto: vigente y aún sin ejecución.
-             La exclusión PARCIAL (se retiró una línea pero el ítem sigue vigente
-             con importe > 0) NO es Excluido: sigue siendo Pendiente. Por eso no
-             basta con mirar el texto del ESTADO CMN.
-             Mismo criterio que ExportService::estadoEjec, para que pantalla y
-             Excel digan lo mismo. */
-          const est=estadoEjecTxt(d);
-          const cls=est==='Ejecutado'?'bg-primary/15 text-primary-dark'
-                   :est==='Excluido' ?'bg-gray-200 text-gray-600'
-                                     :'bg-red-100 text-red-700';
+          /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
+             Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
+          const ej=(+d.IMPORTE_EJEC)>0.005;
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
-               +cls+'">'+est+'</span></td>';
+               +(ej?'bg-primary/15 text-primary-dark':'bg-red-100 text-red-700')+'">'+(ej?'Ejecutado':'Pendiente')+'</span></td>';
         }
         if(k==='IMPORTE_PROG'){
           /* Sin importe programado pero con modificado/ejecutado: se resalta en

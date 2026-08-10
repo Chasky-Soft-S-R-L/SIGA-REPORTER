@@ -93,11 +93,10 @@ if ($export === 'excel' || $export === 'pdf') {
     header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
     header('Pragma: no-cache');
     $all = $q->rows($anioProg,$anioEjec,SEC_EJEC,$ccosto,$fTipo,$fQ,$fMeta,$fAct,$fFase,$fSort,1,MAX_ROWS,$fClasif,$fFuente,$fEjec)['rows'];
-    // Estado de ejecución por ítem (Ejecutado / Pendiente / Excluido), igual que
-    // en pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista
-    // web. La lógica vive en ExportService::estadoEjec (única fuente).
+    // Estado de ejecución por ítem (Pendiente / Ejecutado), igual que en
+    // pantalla, para que la columna ESTADO del Excel/PDF coincida con la vista web.
     foreach ($all as &$r) {
-        $r['ESTADO_EJEC'] = ExportService::estadoEjec($r);
+        $r['ESTADO_EJEC'] = ((float)($r['IMPORTE_EJEC'] ?? 0) > 0.005) ? 'Ejecutado' : 'Pendiente';
     }
     unset($r);
     $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
@@ -645,24 +644,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return t;
   }
 
-  /* ESTADO de ejecución del ítem · TRES estados. Espejo exacto de
-     ExportService::estadoEjec (PHP) — si cambia uno, cambia el otro.
-       Ejecutado → IMPORTE_EJEC > 0. Gana siempre: si llegó a ejecutarse, eso
-                   es lo que pasó, aunque después alguna línea se excluyera.
-       Excluido  → ESTADO_CMN trae EXCLUIDO **y** el vigente (IMPORTE_MOD)
-                   quedó en 0. El ítem salió del cuadro; no está pendiente de
-                   comprarse, ya no se va a comprar. Antes estos aparecían como
-                   "Pendiente", lo que inflaba la lectura de lo que falta.
-       Pendiente → el resto: vigente y aún sin ejecución.
-     La exclusión PARCIAL (línea retirada pero ítem aún vigente con importe > 0)
-     NO cuenta como Excluido: por eso se exige que el vigente sea 0. */
-  function estadoEjecTxt(d){
-    if((+d.IMPORTE_EJEC||0)>0.005) return 'Ejecutado';
-    const cmn=(d.ESTADO_CMN||'').toString().toUpperCase();
-    if(cmn.indexOf('EXCLUIDO')!==-1 && (+d.IMPORTE_MOD||0)<=0.005) return 'Excluido';
-    return 'Pendiente';
-  }
-
   /* FASE DE EJECUCIÓN (SIAF) que se MUESTRA en la columna FASE de la tabla:
      CERTIFICADO · COMPROMETIDO · DEVENGADO (la última alcanzada), o vacío si el
      ítem aún no llegó a ninguna. Es DISTINTA del ESTADO CMN (Programado /
@@ -1083,23 +1064,11 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden" title="'+ec(d[k])+'"><div class="flex gap-1 overflow-hidden whitespace-nowrap">'+badge(d[k])+'</div></td>';
         }
         if(k==='ESTADO_EJEC'){
-          /* TRES estados:
-               Ejecutado (verde)  → IMPORTE_EJEC > 0. Gana siempre.
-               Excluido  (gris)   → el ESTADO CMN trae EXCLUIDO **y** el vigente
-                                    quedó en 0. El ítem salió del cuadro: no está
-                                    pendiente de comprarse, ya no se va a comprar.
-               Pendiente (rojo)   → el resto: vigente y aún sin ejecución.
-             La exclusión PARCIAL (se retiró una línea pero el ítem sigue vigente
-             con importe > 0) NO es Excluido: sigue siendo Pendiente. Por eso no
-             basta con mirar el texto del ESTADO CMN.
-             Mismo criterio que ExportService::estadoEjec, para que pantalla y
-             Excel digan lo mismo. */
-          const est=estadoEjecTxt(d);
-          const cls=est==='Ejecutado'?'bg-primary/15 text-primary-dark'
-                   :est==='Excluido' ?'bg-gray-200 text-gray-600'
-                                     :'bg-red-100 text-red-700';
+          /* Solo 2 estados: Pendiente (sin ejecución, IMPORTE_EJEC = 0) ·
+             Ejecutado (con ejecución, IMPORTE_EJEC > 0). */
+          const ej=(+d.IMPORTE_EJEC)>0.005;
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
-               +cls+'">'+est+'</span></td>';
+               +(ej?'bg-primary/15 text-primary-dark':'bg-red-100 text-red-700')+'">'+(ej?'Ejecutado':'Pendiente')+'</span></td>';
         }
         if(k==='IMPORTE_PROG'){
           /* Sin importe programado pero con modificado/ejecutado: se resalta en
