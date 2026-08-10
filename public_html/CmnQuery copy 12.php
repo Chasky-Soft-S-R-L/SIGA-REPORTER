@@ -231,20 +231,48 @@ class CmnQuery
             ISNULL(ff.NOMBRE, D.FUENTE_FINANC)                      AS FF_NOMBRE,
             cat.NOMBRE_ITEM                                         AS NOMBRE_ITEM,
             um.NOMBRE                                               AS UNIDAD_MEDIDA,
-            /* PROGRAMADO · directo del cuadro original, sin reparto de ningún
-               tipo: `ori` ya trae la línea EXACTA (misma actividad, meta,
-               clasificador y fuente). Si la fila no existía en el original
-               —una inclusión o una ampliación— `ori` viene NULL y el ISNULL
-               deja 0, que es la lectura correcta: no estaba programada. */
-            CASE WHEN D.TIPO_BIEN='S'
+            /* Las tres columnas de PROGRAMADO van a 0 cuando la fila es solo una
+               inclusión (ES_INCL): no existía en el cuadro original, así que no
+               tiene nada programado. Ver la nota de ES_INCL más abajo. */
+            CASE WHEN D.ES_INCL = 1 THEN 0
+                 WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0 THEN 1 ELSE 0 END
-                 ELSE ISNULL(ori.CANT_TOTAL, 0)
+                 WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.CANT_TOTAL, 0)
+                 WHEN ISNULL(D.MOD_ITEM,0) > 0
+                      THEN ROUND(ISNULL(ori.CANT_TOTAL, 0)
+                           * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT)), 4)
+                 ELSE ROUND(ISNULL(ori.CANT_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0), 4)
             END                                                     AS CANTIDAD_PROG,
-            CASE WHEN D.TIPO_BIEN='S' THEN ISNULL(ori.MNTO_TOTAL, 0)
+            CASE WHEN D.ES_INCL = 1 THEN 0
+                 WHEN D.TIPO_BIEN='S'
+                 THEN CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                           WHEN ISNULL(D.MOD_ITEM,0) > 0
+                                THEN ISNULL(ori.MNTO_TOTAL, 0)
+                                     * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
+                           ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0) END
                  ELSE ISNULL(ori.PRECIO_UNIT, 0) END                AS PRECIO_UNIT_PROG,
-            /* IMPORTE_PROG = el importe del cuadro ORIGINAL para esta misma línea
-               presupuestal. 0 si la línea no existía en el original. */
-            ISNULL(ori.MNTO_TOTAL, 0)                               AS IMPORTE_PROG,
+            /* IMPORTE_PROG: SIN ROUND en la rama prorrateada. Redondear cada
+               línea a 2 decimales hacía que la suma de las partes no diera el
+               total del original (el reporte marcaba 194 346.31 contra los
+               194 346.39 del SIGA). Guardando el valor exacto, cada celda se
+               muestra redondeada pero el TOTAL cuadra al céntimo. */
+            CASE WHEN D.ES_INCL = 1 THEN 0
+                 WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                 WHEN ISNULL(D.MOD_ITEM,0) > 0
+                      /* CAST A FLOAT EN EL COCIENTE · no es cosmético.
+                         MOD_ITEM sale de SUM(SUM(MNTO_VIG)) OVER(...), que acumula
+                         precisión numeric alta. Cuando el resultado de la división
+                         pasaría de precisión 38, SQL Server RECORTA la escala hasta
+                         su mínimo de 6 decimales: 36000/79200 = 0.454545454545… se
+                         trunca a 0.454545 y al multiplicar por 79200 da 35 999.964
+                         en vez de 36 000. Repetido en varias líneas, eso producía
+                         los 0.08 de descuadre contra el SIGA (194 346.31 vs
+                         194 346.39). El FLOAT conserva ~15 dígitos significativos,
+                         de sobra para importes de esta magnitud. */
+                      THEN ISNULL(ori.MNTO_TOTAL, 0)
+                           * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
+                 ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0)
+            END                                                     AS IMPORTE_PROG,
             CASE WHEN D.TIPO_BIEN='S' THEN 1 ELSE D.CANT_TOTAL END  AS CANTIDAD_MOD,
             CASE WHEN D.TIPO_BIEN='S' THEN D.MNTO_TOTAL
                  ELSE D.PRECIO_UNIT END                             AS PRECIO_UNIT_MOD,
@@ -305,7 +333,13 @@ class CmnQuery
                se programó (sobregiro respecto al cuadro original). Se repite aquí la
                misma expresión de IMPORTE_PROG porque SQL Server no permite referenciar
                el alias de una columna dentro del mismo SELECT. */
-            ISNULL(ori.MNTO_TOTAL, 0)
+            (CASE WHEN D.ES_INCL = 1 THEN 0
+                  WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                  WHEN ISNULL(D.MOD_ITEM,0) > 0
+                       THEN ISNULL(ori.MNTO_TOTAL, 0)
+                            * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
+                  ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0)
+             END)
             -
             ISNULL(dev.MNTO_EJEC, 0)                               AS DIFERENCIA,
             /* SALDO_DEVENGAR = Ejecutado - Devengado  (ejecutado aún sin devengar). */
@@ -328,13 +362,30 @@ class CmnQuery
                    CASE WHEN SUM(CANT_VIG) > 0 THEN SUM(MNTO_VIG) / SUM(CANT_VIG)
                         ELSE MAX(PRECIO_UNIT) END               AS PRECIO_UNIT,
                    MAX(SEC_CUA_MOD_SAL) AS SEC_CUA_MOD_SAL,
-                   /* Aquí vivían ES_INCL, MOD_ITEM y GRUPOS_ITEM, que servían
-                      para prorratear el cuadro original entre las líneas que
-                      compartían centro+ítem. Ya no hacen falta: `ori` encuentra
-                      la línea original EXACTA por actividad+meta+clasificador+
-                      fuente (ver el OUTER APPLY más abajo), así que no hay nada
-                      que repartir. GRUPOS_TI se mantiene porque sigue siendo
-                      útil como detector al depurar. */
+                   /* ES_INCL = esta fila del cuadro es SOLO una inclusión: todas
+                      sus líneas entraron por modificación (I/IT) y ninguna venía
+                      del cuadro aprobado. Una inclusión NO existía en el cuadro
+                      original, así que su Importe Programado debe ser 0 — no una
+                      porción prorrateada del original de otra línea del mismo
+                      ítem. Reportado por el área usuaria: 3 inclusiones de
+                      servicios recibían importe programado que no les tocaba. */
+                   CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
+                        THEN 1 ELSE 0 END                                         AS ES_INCL,
+                   /* MOD_ITEM / GRUPOS_ITEM son el denominador del prorrateo del
+                      cuadro original entre las líneas que comparten centro+ítem.
+                      Las inclusiones se EXCLUYEN del reparto (aportan 0): el
+                      original pertenece solo a las líneas que ya venían del
+                      cuadro aprobado. Antes se repartía entre todas y las
+                      inclusiones se llevaban una parte, descuadrando el total
+                      contra el SIGA. */
+                   SUM(CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
+                            THEN 0 ELSE SUM(MNTO_VIG) END)
+                        OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS MOD_ITEM,
+                   SUM(CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
+                            THEN 0 ELSE 1 END)
+                        OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                        GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS GRUPOS_ITEM,
                    SUM(SUM(MNTO_VIG)) OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
                         TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
                         GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS MOD_TI,
@@ -402,51 +453,15 @@ class CmnQuery
         LEFT JOIN SIG_CENTRO_COSTO_TAREA tar
                   ON tar.sec_ejec=D.SEC_EJEC AND tar.ano_eje=D.ANNO_EJEC AND tar.centro_costo=D.CENTRO_COSTO
                  AND tar.codigo_tarea=D.CODIGO_TAREA AND tar.tipo_tarea=D.TIPO_TAREA AND tar.nivel_tarea=D.NIVEL_TAREA
-        /* ═══════════════════════════════════════════════════════════════════
-           CUADRO ORIGINAL · con la clave COMPLETA, sin prorrateo
-           ═══════════════════════════════════════════════════════════════════
-           SIG_CUADRO_NECESIDAD_DET solo guarda los ítems; la ACTIVIDAD, META,
-           CLASIFICADOR y FUENTE viven en la cabecera SIG_CUADRO_NECESIDAD, una
-           fila por línea presupuestal, enlazada por SECUENCIA + FASE_CUADRO.
-           Uniendo ambas, cada fila del cuadro modificado encuentra su original
-           EXACTO, o no encuentra ninguno (y entonces vale 0).
-
-           ESTO REEMPLAZA AL PRORRATEO, que era la causa de tres errores:
-             · Las inclusiones recibían una porción del original de otra línea
-               del mismo ítem (reportado por el área usuaria: 3 inclusiones de
-               servicios con importe programado que no les correspondía).
-             · Las ampliaciones aprobadas se repartían el original entre todas,
-               en vez de que lo tuviera la línea que sí venía del cuadro (el
-               ítem 071100380486 del centro 104.07.17.11: los 14 000 son de la
-               tarea 236, no un reparto entre las tareas 236/258/1054).
-             · El cociente numeric se truncaba a 6 decimales y la suma de los
-               trozos perdía céntimos (194 346.31 contra 194 346.39 del SIGA).
-           Verificado: 6 243 filas del DET, 0 huérfanas respecto a la cabecera,
-           y una sola FASE_CUADRO (5) en el ejercicio.
-
-           El clasificador se compara en PLANO (sin puntos ni espacios) porque
-           el SIGA lo guarda con espaciado inconsistente entre tablas. */
         OUTER APPLY (
             SELECT SUM(n.CANT_TOTAL)  AS CANT_TOTAL,
                    SUM(n.MNTO_TOTAL)  AS MNTO_TOTAL,
                    SUM(n.MNTO_TOTAL) / NULLIF(SUM(n.CANT_TOTAL), 0) AS PRECIO_UNIT
             FROM   SIG_CUADRO_NECESIDAD_DET n
-            JOIN   SIG_CUADRO_NECESIDAD cn
-                   ON cn.SEC_EJEC=n.SEC_EJEC AND cn.ANO_EJE=n.ANO_EJE
-                  AND cn.CENTRO_COSTO=n.CENTRO_COSTO
-                  AND cn.SECUENCIA=n.SECUENCIA AND cn.FASE_CUADRO=n.FASE_CUADRO
             WHERE  n.SEC_EJEC=D.SEC_EJEC AND n.ANO_EJE=D.ANNO_EJEC
               AND  n.CENTRO_COSTO=D.CENTRO_COSTO AND n.TIPO_BIEN=D.TIPO_BIEN
               AND  n.GRUPO_BIEN=D.GRUPO_BIEN AND n.CLASE_BIEN=D.CLASE_BIEN
               AND  n.FAMILIA_BIEN=D.FAMILIA_BIEN AND n.ITEM_BIEN=D.ITEM_BIEN
-              /* Clave presupuestal completa: sin ella el original de un ítem se
-                 atribuía a todas sus líneas del cuadro modificado. */
-              AND  cn.CODIGO_TAREA=D.CODIGO_TAREA
-              AND  cn.TIPO_TAREA=D.TIPO_TAREA AND cn.NIVEL_TAREA=D.NIVEL_TAREA
-              AND  cn.sec_func=D.SEC_FUNC
-              AND  cn.FUENTE_FINANC=D.FUENTE_FINANC
-              AND  REPLACE(REPLACE(cn.CLASIFICADOR,'.',''),' ','')
-                 = REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ','')
         ) ori
         /* RESPONSABLE: el empleado que figura en SIG_PAAC_CONSOLIDADO para el
            consolidado de esta fila del cuadro (vía SIG_CUADRO_MODIFICADO_CMN,
@@ -490,7 +505,6 @@ class CmnQuery
                    mismas órdenes repetidas en DATOS EJECUCION. */
                 dme.FUENTE_FINANC,
                 dme.sec_func                                AS SEC_FUNC,
-                REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','')  AS CLASIF_PLANO,
                 STUFF((
                     SELECT DISTINCT ', ' + CASE WHEN oa2.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END
                            + CONVERT(VARCHAR, oa2.NRO_ORDEN)
@@ -555,8 +569,6 @@ class CmnQuery
                           AND dme2.SECUENCIA=db2.SECUENCIA AND dme2.SEC_META=dm2.SEC_META
                           AND dme2.FUENTE_FINANC=dme.FUENTE_FINANC
                           AND dme2.sec_func=dme.sec_func
-                          AND REPLACE(REPLACE(dme2.CLASIFICADOR,'.',''),' ','')
-                            = REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','')
                     WHERE  ca2.SEC_EJEC=ca.SEC_EJEC AND ca2.ANO_EJE=ca.ANO_EJE AND ca2.ESTADO<>'A'
                       AND  dm2.CENTRO_COSTO=dm.CENTRO_COSTO
                       AND  dm2.TIPO_TAREA=dm.TIPO_TAREA AND dm2.NIVEL_TAREA=dm.NIVEL_TAREA
@@ -589,8 +601,7 @@ class CmnQuery
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                      db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     dme.FUENTE_FINANC, dme.sec_func,
-                     REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','')
+                     dme.FUENTE_FINANC, dme.sec_func
         ) ej
              ON ej.SEC_EJEC     = D.SEC_EJEC
             AND ej.ANO_EJE      = D.ANNO_PROG
@@ -608,7 +619,6 @@ class CmnQuery
                o fuentes se atribuía entera a cada fila. */
             AND ej.FUENTE_FINANC = D.FUENTE_FINANC
             AND ej.SEC_FUNC      = D.SEC_FUNC
-            AND ej.CLASIF_PLANO  = REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ','')
         LEFT JOIN (
             /* Cadena de EJECUCIÓN del cuadro (compromiso ejecutado = dm.MNTO_SOLES),
                con el DEVENGADO CONTABLE real (SIG_DEVENGADO) traído aparte por orden.
@@ -629,7 +639,6 @@ class CmnQuery
                    Y CANT_DEPEND se suma tal cual: son unidades enteras. */
                 dme.FUENTE_FINANC,
                 dme.sec_func                            AS SEC_FUNC,
-                REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','') AS CLASIF_PLANO,
                 SUM(dm.CANT_DEPEND)                     AS CANT_DEV,
                 SUM(dm.MNTO_SOLES)                      AS MNTO_EJEC,     -- compromiso ejecutado
                 SUM(dm.VALOR_DEPEND)                    AS MNTO_COMP,     -- compromiso bruto (ya no se expone)
@@ -706,8 +715,7 @@ class CmnQuery
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                      db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     dme.FUENTE_FINANC, dme.sec_func,
-                     REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','')
+                     dme.FUENTE_FINANC, dme.sec_func
         ) dev
              ON dev.SEC_EJEC     = D.SEC_EJEC
             AND dev.ANO_EJE      = D.ANNO_PROG
@@ -724,15 +732,7 @@ class CmnQuery
                el total a cada meta. Se compara contra el RB detallado
                (D.FUENTE_FINANC), no contra el FF agregado. */
             AND dev.FUENTE_FINANC = D.FUENTE_FINANC
-            AND dev.SEC_FUNC      = D.SEC_FUNC
-            /* CLASIFICADOR: dos filas del cuadro pueden compartir centro+tarea+
-               ítem+meta+fuente y diferir SOLO en el clasificador (caso real:
-               ítem 071100380486 del centro 104.07.17.11, clasificadores
-               2.3.2 7.13 98 y 2.3.2 9.1 1). Sin esta condición ambas se
-               llevaban la ejecución de la OS 337 y el importe se contaba dos
-               veces. Se compara en PLANO porque el SIGA guarda el clasificador
-               con espaciado inconsistente entre tablas. */
-            AND dev.CLASIF_PLANO  = REPLACE(REPLACE(D.CLASIFICADOR,'.',''),' ','')";
+            AND dev.SEC_FUNC      = D.SEC_FUNC";
     }
 
     private function faseExpr(string $t = 'T'): string
@@ -1093,18 +1093,14 @@ class CmnQuery
     public function ordenesItem(int $anioEjec, int $secEjec, string $ccosto,
                                 string $tipo, string $g, string $c, string $f, string $it,
                                 int $tipoTarea, string $nivelTarea, int $codigoTarea,
-                                string $fuente = '', int $meta = 0, string $clasif = ''): array
+                                string $fuente = '', int $meta = 0): array
     {
-        /* $fuente = RB (09/00), $meta = SEC_FUNC y $clasif = CLASIFICADOR de la
-           fila del cuadro. Los tres completan su identidad: dos filas pueden
-           compartir centro+tarea+ítem y diferir solo en uno de ellos. Si vienen
-           vacíos (llamada antigua) no se filtra, pero entonces el modal puede
-           mostrar órdenes que no son de esa fila. El clasificador se compara en
-           PLANO por el espaciado inconsistente del SIGA. */
+        /* $fuente = RB detallado (09/00) y $meta = SEC_FUNC de la fila del cuadro.
+           Si vienen vacíos (llamada antigua) NO se filtra y se mantiene el
+           comportamiento previo, pero en líneas multi-fuente o en órdenes
+           repartidas entre metas el modal mostraría órdenes que no son de la fila. */
         $filtroFF = $fuente !== '' ? " AND dme.FUENTE_FINANC = :ff " : "";
         $filtroMT = $meta > 0      ? " AND dme.sec_func = :mt "      : "";
-        $filtroCL = $clasif !== ''
-            ? " AND REPLACE(REPLACE(dme.CLASIFICADOR,'.',''),' ','') = :cl " : "";
         $sql = "
             SELECT
                 ca.NRO_ORDEN                                   AS nro,
@@ -1148,7 +1144,6 @@ class CmnQuery
                   AND dme.SECUENCIA=db.SECUENCIA AND dme.SEC_META=dm.SEC_META
                   {$filtroFF}
                   {$filtroMT}
-                  {$filtroCL}
             LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
             /* Por fila: devengado real de la orden+ítem y ejecutado total de esa
                orden+ítem en TODOS los centros (denominador del prorrateo). */
@@ -1199,7 +1194,6 @@ class CmnQuery
         $st->bindValue(':f',  $f);  $st->bindValue(':it', $it);
         if ($fuente !== '') $st->bindValue(':ff', $fuente);
         if ($meta > 0)      $st->bindValue(':mt', $meta, PDO::PARAM_INT);
-        if ($clasif !== '') $st->bindValue(':cl', preg_replace('/[.\s]/', '', $clasif));
         $st->execute();
         $rows = $st->fetchAll();
         foreach ($rows as &$r) {
