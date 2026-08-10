@@ -164,16 +164,14 @@ if ($action === 'ordenes') {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     try {
-        /* ff = RB detallado (09/00) y mt = meta de la fila. Sin ellos, en las
-           líneas programadas con DOS fuentes, o en órdenes repartidas entre
-           varias metas, el modal mostraría órdenes ajenas a la fila y el
-           importe no cuadraría con la tabla. */
+        /* ff = RB detallado (09/00) de la fila. Sin él, en las líneas que están
+           programadas con DOS fuentes el modal mostraría las órdenes de ambas
+           y el importe no cuadraría con la tabla. */
         echo json_encode($q->ordenesItem($anioEjec, SEC_EJEC, (string)($_GET['cc']??$ccosto),
             (string)($_GET['t']??''), (string)($_GET['g']??''), (string)($_GET['c']??''),
             (string)($_GET['f']??''), (string)($_GET['it']??''),
             (int)($_GET['tt']??0), (string)($_GET['nt']??''), (int)($_GET['ct']??0),
-            (string)($_GET['ff']??''), (int)($_GET['mt']??0),
-            (string)($_GET['cl']??'')), JSON_UNESCAPED_UNICODE);
+            (string)($_GET['ff']??'')), JSON_UNESCAPED_UNICODE);
     } catch (Throwable $e) {
         error_log('[index/ordenes] ' . $e->getMessage());
         echo json_encode(['error'=>$errPublico($e)], JSON_UNESCAPED_UNICODE);
@@ -1293,10 +1291,10 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     let h=NOCACHE?null:histCache[key];
     if(!h){
       const p=new URLSearchParams({resource:'cmn',anio:ANIO,action:'historial',cc:d.CCOSTO_COD,t:d.TIPO_BIEN,g:d.GRUPO_BIEN,c:d.CLASE_BIEN,f:d.FAMILIA_BIEN,it:d.ITEM_BIEN,meta:d.META,clasif:d.CLASIF_COD});
-      /* ff = d.RB (fuente de ESTA fila) y mt = d.META. Una misma línea puede
-         estar programada con dos fuentes, y una orden puede repartirse entre
-         varias metas: sin ambos filtros el modal mostraría órdenes ajenas. */
-      const po=new URLSearchParams({resource:'cmn',anio:ANIO,action:'ordenes',cc:d.CCOSTO_COD,t:d.TIPO_BIEN,g:d.GRUPO_BIEN,c:d.CLASE_BIEN,f:d.FAMILIA_BIEN,it:d.ITEM_BIEN,tt:d.TIPO_TAREA,nt:d.NIVEL_TAREA,ct:d.CODIGO_TAREA,ff:(d.RB||''),mt:(d.META||0),cl:(d.CLASIF_COD||'')});
+      /* ff = d.RB (fuente detallada de ESTA fila). Una misma línea puede estar
+         programada con dos fuentes: sin este filtro ambas filas mostrarían las
+         mismas órdenes y el mismo importe. */
+      const po=new URLSearchParams({resource:'cmn',anio:ANIO,action:'ordenes',cc:d.CCOSTO_COD,t:d.TIPO_BIEN,g:d.GRUPO_BIEN,c:d.CLASE_BIEN,f:d.FAMILIA_BIEN,it:d.ITEM_BIEN,tt:d.TIPO_TAREA,nt:d.NIVEL_TAREA,ct:d.CODIGO_TAREA,ff:(d.RB||'')});
       try{
         const [rh,ro]=await Promise.all([
           fetch('?'+p.toString(),{credentials:'same-origin'}).then(r=>r.json()),
