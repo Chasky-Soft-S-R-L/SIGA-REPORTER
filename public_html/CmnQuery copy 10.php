@@ -170,42 +170,67 @@ class CmnQuery
     }
 
     /**
-     * ═══════════════════════════════════════════════════════════════════════
-     * FUENTE Y META DE CADA FILA DE EJECUCIÓN · sin prorrateo
-     * ═══════════════════════════════════════════════════════════════════════
-     * PROBLEMA: una misma línea del cuadro (centro + tarea + ítem) puede estar
-     * programada con DOS fuentes distintas (240 grupos así en 2026), y una orden
-     * puede repartirse entre varias metas y centros. La cadena
-     * SIG_CUADRO_ADQUISICION → SIG_DETALLE_BSERV_CUADRO → SIG_DEPEN_META_CUADRO
-     * NO lleva fuente ni meta, así que agregando solo por centro+tarea+ítem las
-     * dos filas del cuadro recibían la ejecución COMPLETA y los totales salían
-     * al doble.
+     * PESO DE CADA FUENTE DE FINANCIAMIENTO EN UNA ORDEN+ÍTEM.
      *
-     * SOLUCIÓN: SIG_DEPEN_META_CUADRO.SEC_META es un índice local (1..N dentro
-     * del cuadro) que apunta a SIG_DETALLE_METAS_CUADRO, donde SÍ están
-     * sec_func (meta), CLASIFICADOR y FUENTE_FINANC de esa porción. La relación
-     * es 1:1 y exacta: en la OC 51 del ítem 710600010015, SEC_META=4 → meta 39,
-     * fuente 00, 20 unidades, S/ 78.59 — que es literalmente la fila del cuadro
-     * del centro 104.07.08.03.02. Basta con unir esa tabla y agregar por
-     * fuente + meta; NO hace falta repartir nada.
+     * POR QUÉ EXISTE: una misma línea del cuadro (centro + tarea + ítem) puede
+     * estar programada con DOS fuentes distintas — en 2026 hay 240 grupos así.
+     * La cadena de ejecución (SIG_CUADRO_ADQUISICION → SIG_DETALLE_BSERV_CUADRO
+     * → SIG_DEPEN_META_CUADRO) NO lleva fuente, así que `dev` y `ej` agregaban
+     * por centro+tarea+ítem y las DOS filas del cuadro recibían la ejecución
+     * COMPLETA: los totales salían al doble y la fila sin programación aparecía
+     * como sobregiro fantasma (p.ej. ítem 071100381505 del centro
+     * 104.07.08.03.01: 45 200 ejecutados se contaban dos veces = 90 400).
      *
-     * INTENTO ANTERIOR (descartado, quedó documentado para que nadie lo repita):
-     * se ponderaba con un PESO = monto de la fuente / monto total, calculado
-     * desde SIG_ORDEN_ITEM_PPTO agrupando por orden+ítem. Falla por dos motivos:
-     *   · Las filas de SIG_ORDEN_ITEM_PPTO están a nivel de META+clasificador+
-     *     fuente, no de centro. Agrupar solo por orden+ítem mezcla las metas y
-     *     diluye el peso: la fila de 78.59 (peso real 1.0) recibía 0.9242 y
-     *     mostraba 72.64. El importe quedaba SUBESTIMADO.
-     *   · Aplicar un peso MONETARIO a CANT_DEPEND produce cantidades
-     *     fraccionarias (18.49 botas), imposibles en el SIGA: los CANT_DEPEND
-     *     son todos enteros.
-     * La lección: cuando el reparto ya está registrado en una tabla, buscarlo;
-     * prorratear es siempre la segunda mejor opción y arrastra errores.
+     * DE DÓNDE SALE LA FUENTE: SIG_ORDEN_ITEM_PPTO es la ÚNICA tabla de la
+     * cadena que tiene FUENTE_FINANC. Se une a SIG_ORDEN_ITEM por SEC_ITEM
+     * (imprescindible: sin SEC_ITEM el join es un producto cartesiano — una
+     * orden de 47 ítems multiplica por 47) para bajar a los códigos de ítem.
+     *
+     * QUÉ DEVUELVE: una fila por (orden, ítem, fuente) con PESO = proporción
+     * del monto de esa fuente sobre el total de la orden+ítem. En las 998
+     * órdenes de fuente única el peso es 1.0 y el resultado es idéntico al de
+     * antes; en las 60 órdenes con dos fuentes reparte proporcionalmente. Si
+     * todos los montos son 0 (dato sin poblar) reparte en partes iguales entre
+     * las fuentes presentes, en vez de anular la ejecución.
+     *
+     * OJO: NO se une a SIG_CUADRO_ADQUISICION aquí. Esa tabla abre por
+     * SEC_CUADRO y multiplicaría las filas; como el peso es un cociente daría
+     * igual, pero el importe intermedio se vería inflado y confunde al depurar.
      */
+    private function fuenteWeightSql(): string
+    {
+        return "
+            SELECT w.SEC_EJEC, w.ANO_EJE, w.NRO_ORDEN, w.TIPO_BIEN,
+                   w.GRUPO_BIEN, w.CLASE_BIEN, w.FAMILIA_BIEN, w.ITEM_BIEN,
+                   w.FUENTE_FINANC,
+                   CASE WHEN w.MNTO_TOT > 0 THEN w.MNTO_FF / w.MNTO_TOT
+                        ELSE 1.0 / NULLIF(w.N_FF, 0) END AS PESO
+            FROM (
+                SELECT oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
+                       oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN,
+                       oip.FUENTE_FINANC,
+                       SUM(oip.MNTO_SOLES) AS MNTO_FF,
+                       SUM(SUM(oip.MNTO_SOLES)) OVER (PARTITION BY
+                            oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
+                            oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN) AS MNTO_TOT,
+                       COUNT(*) OVER (PARTITION BY
+                            oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
+                            oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN) AS N_FF
+                FROM   SIG_ORDEN_ITEM_PPTO oip
+                JOIN   SIG_ORDEN_ITEM oi
+                       ON oi.SEC_EJEC=oip.SEC_EJEC AND oi.ANO_EJE=oip.ANO_EJE
+                      AND oi.NRO_ORDEN=oip.NRO_ORDEN AND oi.TIPO_BIEN=oip.TIPO_BIEN
+                      AND oi.SEC_ITEM=oip.SEC_ITEM
+                GROUP BY oip.SEC_EJEC, oip.ANO_EJE, oip.NRO_ORDEN, oip.TIPO_BIEN,
+                         oi.GRUPO_BIEN, oi.CLASE_BIEN, oi.FAMILIA_BIEN, oi.ITEM_BIEN,
+                         oip.FUENTE_FINANC
+            ) w";
+    }
 
     /** SQL interno del reporte (sin ORDER BY ni paginado), reutilizable. */
     private function innerSql(bool $withCC): string
     {
+        $ffw = $this->fuenteWeightSql();
         $filtroCC = $withCC ? " AND d.CENTRO_COSTO = :ccosto " : "";
         return "
         SELECT
@@ -453,12 +478,10 @@ class CmnQuery
                 ca.SEC_EJEC, ca.ANO_EJE,
                 dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                 db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                /* FUENTE + META reales de esta porción de la orden, desde
-                   SIG_DETALLE_METAS_CUADRO (vía dm.SEC_META). Sin esto, las dos
-                   filas del cuadro (misma línea, distinto RB) mostraban las
+                /* La lista de órdenes también se separa POR FUENTE: si no, las
+                   dos filas del cuadro (misma línea, distinto RB) mostraban las
                    mismas órdenes repetidas en DATOS EJECUCION. */
-                dme.FUENTE_FINANC,
-                dme.sec_func                                AS SEC_FUNC,
+                ffw.FUENTE_FINANC,
                 STUFF((
                     SELECT DISTINCT ', ' + CASE WHEN oa2.TIPO_BIEN='B' THEN 'OC ' ELSE 'OS ' END
                            + CONVERT(VARCHAR, oa2.NRO_ORDEN)
@@ -515,14 +538,14 @@ class CmnQuery
                     LEFT JOIN SIG_CERTIFICACION cab2
                            ON cab2.SEC_EJEC=oa2.SEC_EJEC AND cab2.ANO_EJE=oa2.ANO_EJE
                           AND cab2.NRO_CERTIFICA=oa2.NRO_CERTIFICA
-                    /* Solo las órdenes imputadas a la MISMA fuente y meta que la
-                       fila del cuadro. dme viene del FROM externo (correlación). */
-                    JOIN   SIG_DETALLE_METAS_CUADRO dme2
-                           ON dme2.sec_ejec=db2.SEC_EJEC AND dme2.ANO_EJE=db2.ANO_EJE
-                          AND dme2.TIPO_BIEN=db2.TIPO_BIEN AND dme2.SEC_CUADRO=db2.SEC_CUADRO
-                          AND dme2.SECUENCIA=db2.SECUENCIA AND dme2.SEC_META=dm2.SEC_META
-                          AND dme2.FUENTE_FINANC=dme.FUENTE_FINANC
-                          AND dme2.sec_func=dme.sec_func
+                    /* Solo las órdenes imputadas a la MISMA fuente que la fila
+                       del cuadro (ffw viene del FROM externo: correlación). */
+                    JOIN ({$ffw}) ffw2
+                           ON ffw2.SEC_EJEC=oa2.SEC_EJEC AND ffw2.ANO_EJE=oa2.ANO_EJE
+                          AND ffw2.NRO_ORDEN=oa2.NRO_ORDEN AND ffw2.TIPO_BIEN=oa2.TIPO_BIEN
+                          AND ffw2.GRUPO_BIEN=db2.GRUPO_BIEN AND ffw2.CLASE_BIEN=db2.CLASE_BIEN
+                          AND ffw2.FAMILIA_BIEN=db2.FAMILIA_BIEN AND ffw2.ITEM_BIEN=db2.ITEM_BIEN
+                          AND ffw2.FUENTE_FINANC=ffw.FUENTE_FINANC
                     WHERE  ca2.SEC_EJEC=ca.SEC_EJEC AND ca2.ANO_EJE=ca.ANO_EJE AND ca2.ESTADO<>'A'
                       AND  dm2.CENTRO_COSTO=dm.CENTRO_COSTO
                       AND  dm2.TIPO_TAREA=dm.TIPO_TAREA AND dm2.NIVEL_TAREA=dm.NIVEL_TAREA
@@ -539,12 +562,11 @@ class CmnQuery
                    ON dm.SEC_EJEC=db.SEC_EJEC AND dm.ANO_EJE=db.ANO_EJE
                   AND dm.TIPO_BIEN=db.TIPO_BIEN AND dm.SEC_CUADRO=db.SEC_CUADRO
                   AND dm.SECUENCIA=db.SECUENCIA
-            /* SEC_META traduce la porción de la orden a su meta + clasificador +
-               fuente reales. Relación 1:1 con dm, sin prorrateo. */
-            JOIN   SIG_DETALLE_METAS_CUADRO dme
-                   ON dme.sec_ejec=db.SEC_EJEC AND dme.ANO_EJE=db.ANO_EJE
-                  AND dme.TIPO_BIEN=db.TIPO_BIEN AND dme.SEC_CUADRO=db.SEC_CUADRO
-                  AND dme.SECUENCIA=db.SECUENCIA AND dme.SEC_META=dm.SEC_META
+            JOIN ({$ffw}) ffw
+                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
+                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
+                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
+                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
             WHERE  ca.ESTADO<>'A'
               AND  EXISTS (
                     SELECT 1 FROM SIG_ORDEN_ADQUISICION oa
@@ -555,7 +577,7 @@ class CmnQuery
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                      db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     dme.FUENTE_FINANC, dme.sec_func
+                     ffw.FUENTE_FINANC
         ) ej
              ON ej.SEC_EJEC     = D.SEC_EJEC
             AND ej.ANO_EJE      = D.ANNO_PROG
@@ -567,12 +589,8 @@ class CmnQuery
             AND ej.CLASE_BIEN   = D.CLASE_BIEN AND ej.FAMILIA_BIEN=D.FAMILIA_BIEN
             AND ej.ITEM_BIEN    = D.ITEM_BIEN
             /* FUENTE: D.FUENTE_FINANC es el RB detallado (09/00), que es lo que
-               guarda SIG_DETALLE_METAS_CUADRO — NO el FF agregado (1/2) de la
-               vista. META: D.SEC_FUNC. Ambas son parte de la identidad de la
-               fila del cuadro; sin ellas una orden repartida entre varias metas
-               o fuentes se atribuía entera a cada fila. */
+               guarda SIG_ORDEN_ITEM_PPTO — NO el FF agregado (1/2) de la vista. */
             AND ej.FUENTE_FINANC = D.FUENTE_FINANC
-            AND ej.SEC_FUNC      = D.SEC_FUNC
         LEFT JOIN (
             /* Cadena de EJECUCIÓN del cuadro (compromiso ejecutado = dm.MNTO_SOLES),
                con el DEVENGADO CONTABLE real (SIG_DEVENGADO) traído aparte por orden.
@@ -581,21 +599,14 @@ class CmnQuery
                 ca.SEC_EJEC, ca.ANO_EJE,
                 dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                 db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                /* FUENTE + META reales de esta porción de la orden (vía
-                   dm.SEC_META → SIG_DETALLE_METAS_CUADRO). Son parte de la
-                   identidad de la fila del cuadro: sin ellas, una orden
-                   repartida entre varias metas/fuentes se atribuía COMPLETA a
-                   cada fila y los totales salían al doble.
-                   Los importes van SIN ponderar: dm.MNTO_SOLES ya es el monto
-                   exacto de esta meta+fuente en este centro (verificado: la
-                   OC 51 del ítem 710600010015 da 78.59 para la meta 39/fuente
-                   00, que es exactamente la fila del centro 104.07.08.03.02).
-                   Y CANT_DEPEND se suma tal cual: son unidades enteras. */
-                dme.FUENTE_FINANC,
-                dme.sec_func                            AS SEC_FUNC,
-                SUM(dm.CANT_DEPEND)                     AS CANT_DEV,
-                SUM(dm.MNTO_SOLES)                      AS MNTO_EJEC,     -- compromiso ejecutado
-                SUM(dm.VALOR_DEPEND)                    AS MNTO_COMP,     -- compromiso bruto (ya no se expone)
+                /* FUENTE + PESO: la cadena de ejecución no lleva fuente, así que
+                   sin esto las dos filas del cuadro (mismo centro+tarea+ítem,
+                   distinto RB) se llevaban la ejecución COMPLETA cada una y los
+                   totales salían al doble. Ver fuenteWeightSql(). */
+                ffw.FUENTE_FINANC,
+                SUM(dm.CANT_DEPEND * ffw.PESO)          AS CANT_DEV,
+                SUM(dm.MNTO_SOLES  * ffw.PESO)          AS MNTO_EJEC,     -- compromiso ejecutado
+                SUM(dm.VALOR_DEPEND * ffw.PESO)         AS MNTO_COMP,     -- compromiso bruto (ya no se expone)
                 /* DEVENGADO por línea = devengado real de la orden PRORRATEADO por la
                    proporción del ejecutado de esta línea sobre el ejecutado total de la
                    orden+ítem. El devengado del SIGA vive a nivel de ORDEN (no por
@@ -609,7 +620,7 @@ class CmnQuery
                    real y el ejecutado total de la orden se calculan por fila en el
                    OUTER APPLY dvf, y aquí sólo se prorratea dentro del SUM. */
                 SUM(CASE WHEN dvf.EJEC_TOT_ORDEN > 0
-                         THEN dm.MNTO_SOLES * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
+                         THEN dm.MNTO_SOLES * ffw.PESO * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
                          ELSE 0 END)                    AS MNTO_DEVREAL
             FROM   SIG_CUADRO_ADQUISICION ca
             JOIN   SIG_DETALLE_BSERV_CUADRO db
@@ -619,12 +630,16 @@ class CmnQuery
                    ON dm.SEC_EJEC=db.SEC_EJEC AND dm.ANO_EJE=db.ANO_EJE
                   AND dm.TIPO_BIEN=db.TIPO_BIEN AND dm.SEC_CUADRO=db.SEC_CUADRO
                   AND dm.SECUENCIA=db.SECUENCIA
-            /* SEC_META traduce la porción de la orden a su meta + clasificador +
-               fuente reales. Relación 1:1 con dm, sin prorrateo. */
-            JOIN   SIG_DETALLE_METAS_CUADRO dme
-                   ON dme.sec_ejec=db.SEC_EJEC AND dme.ANO_EJE=db.ANO_EJE
-                  AND dme.TIPO_BIEN=db.TIPO_BIEN AND dme.SEC_CUADRO=db.SEC_CUADRO
-                  AND dme.SECUENCIA=db.SECUENCIA AND dme.SEC_META=dm.SEC_META
+            /* Peso de la fuente de esta fila del cuadro en la orden+ítem. El
+               denominador del prorrateo del devengado (dvf.EJEC_TOT_ORDEN) se
+               deja SIN ponderar a propósito: es el ejecutado total de la orden
+               en todas las fuentes y centros, y al ponderar solo el numerador
+               cada fuente se lleva exactamente su parte. */
+            JOIN ({$ffw}) ffw
+                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
+                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
+                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
+                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
             /* Por fila: devengado real de la orden+ítem (a nivel de orden completa) y
                ejecutado total de esa orden+ítem en TODOS los centros (denominador del
                prorrateo). Ambos escalares, resueltos aquí para no meter subquery en el SUM. */
@@ -669,7 +684,7 @@ class CmnQuery
             GROUP BY ca.SEC_EJEC, ca.ANO_EJE,
                      dm.CENTRO_COSTO, dm.TIPO_TAREA, dm.NIVEL_TAREA, dm.CODIGO_TAREA,
                      db.TIPO_BIEN, db.GRUPO_BIEN, db.CLASE_BIEN, db.FAMILIA_BIEN, db.ITEM_BIEN,
-                     dme.FUENTE_FINANC, dme.sec_func
+                     ffw.FUENTE_FINANC
         ) dev
              ON dev.SEC_EJEC     = D.SEC_EJEC
             AND dev.ANO_EJE      = D.ANNO_PROG
@@ -680,13 +695,10 @@ class CmnQuery
             AND dev.TIPO_BIEN    = D.TIPO_BIEN  AND dev.GRUPO_BIEN=D.GRUPO_BIEN
             AND dev.CLASE_BIEN   = D.CLASE_BIEN AND dev.FAMILIA_BIEN=D.FAMILIA_BIEN
             AND dev.ITEM_BIEN    = D.ITEM_BIEN
-            /* FUENTE + META completan la identidad de la fila del cuadro. Sin
-               ellas, las 240 líneas multi-fuente de 2026 contaban su ejecución
-               dos veces, y las órdenes repartidas entre varias metas atribuían
-               el total a cada meta. Se compara contra el RB detallado
-               (D.FUENTE_FINANC), no contra el FF agregado. */
-            AND dev.FUENTE_FINANC = D.FUENTE_FINANC
-            AND dev.SEC_FUNC      = D.SEC_FUNC";
+            /* FUENTE: contra el RB detallado (D.FUENTE_FINANC), no contra el FF
+               agregado. Sin esta condición, las 240 líneas multi-fuente de 2026
+               contaban su ejecución dos veces. */
+            AND dev.FUENTE_FINANC = D.FUENTE_FINANC";
     }
 
     private function faseExpr(string $t = 'T'): string
@@ -1047,14 +1059,13 @@ class CmnQuery
     public function ordenesItem(int $anioEjec, int $secEjec, string $ccosto,
                                 string $tipo, string $g, string $c, string $f, string $it,
                                 int $tipoTarea, string $nivelTarea, int $codigoTarea,
-                                string $fuente = '', int $meta = 0): array
+                                string $fuente = ''): array
     {
-        /* $fuente = RB detallado (09/00) y $meta = SEC_FUNC de la fila del cuadro.
-           Si vienen vacíos (llamada antigua) NO se filtra y se mantiene el
-           comportamiento previo, pero en líneas multi-fuente o en órdenes
-           repartidas entre metas el modal mostraría órdenes que no son de la fila. */
-        $filtroFF = $fuente !== '' ? " AND dme.FUENTE_FINANC = :ff " : "";
-        $filtroMT = $meta > 0      ? " AND dme.sec_func = :mt "      : "";
+        /* $fuente = RB detallado (09/00) de la fila del cuadro. Si viene vacío
+           (llamada antigua) NO se filtra y se mantiene el comportamiento previo,
+           pero en líneas multi-fuente el modal mostrará las órdenes de ambas. */
+        $ffw     = $this->fuenteWeightSql();
+        $filtroFF = $fuente !== '' ? " AND ffw.FUENTE_FINANC = :ff " : "";
         $sql = "
             SELECT
                 ca.NRO_ORDEN                                   AS nro,
@@ -1068,14 +1079,15 @@ class CmnQuery
                 MAX(NULLIF(oa.NRO_CERTIFICA,0))                AS nro_cert,
                 MAX(NULLIF(cab.NRO_CERTIFICA_SIAF,0))          AS nro_cert_siaf,
                 MAX(CASE WHEN ISNULL(cab.ANULADO,0)=0 THEN 0 ELSE 1 END) AS cert_anulada,
-                /* Importes EXACTOS de esta meta+fuente en este centro (dm.MNTO_SOLES
-                   ya viene desglosado así); nada de prorrateo. */
-                SUM(dm.MNTO_SOLES)                             AS ejecutado,
+                /* Ponderado por la fuente de la fila del cuadro, igual que `dev`
+                   en innerSql — si no, las dos filas multi-fuente mostrarían el
+                   mismo importe completo y no cuadrarían con la tabla. */
+                SUM(dm.MNTO_SOLES * ffw.PESO)                  AS ejecutado,
                 /* Devengado prorrateado: devengado real de la orden × (ejecutado de
                    esta línea / ejecutado total de la orden+ítem). SQL Server no admite
                    SUM(...subquery...): los escalares se resuelven por fila en dvf. */
                 SUM(CASE WHEN dvf.EJEC_TOT_ORDEN > 0
-                         THEN dm.MNTO_SOLES * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
+                         THEN dm.MNTO_SOLES * ffw.PESO * dvf.DEV_REAL_ORDEN / dvf.EJEC_TOT_ORDEN
                          ELSE 0 END)                          AS devengado
             FROM   SIG_CUADRO_ADQUISICION ca
             JOIN   SIG_DETALLE_BSERV_CUADRO db
@@ -1092,12 +1104,12 @@ class CmnQuery
             LEFT JOIN SIG_CERTIFICACION cab
                    ON cab.SEC_EJEC=oa.SEC_EJEC AND cab.ANO_EJE=oa.ANO_EJE
                   AND cab.NRO_CERTIFICA=oa.NRO_CERTIFICA
-            JOIN   SIG_DETALLE_METAS_CUADRO dme
-                   ON dme.sec_ejec=db.SEC_EJEC AND dme.ANO_EJE=db.ANO_EJE
-                  AND dme.TIPO_BIEN=db.TIPO_BIEN AND dme.SEC_CUADRO=db.SEC_CUADRO
-                  AND dme.SECUENCIA=db.SECUENCIA AND dme.SEC_META=dm.SEC_META
+            JOIN ({$ffw}) ffw
+                   ON ffw.SEC_EJEC=ca.SEC_EJEC AND ffw.ANO_EJE=ca.ANO_EJE
+                  AND ffw.NRO_ORDEN=ca.NRO_ORDEN AND ffw.TIPO_BIEN=ca.TIPO_BIEN
+                  AND ffw.GRUPO_BIEN=db.GRUPO_BIEN AND ffw.CLASE_BIEN=db.CLASE_BIEN
+                  AND ffw.FAMILIA_BIEN=db.FAMILIA_BIEN AND ffw.ITEM_BIEN=db.ITEM_BIEN
                   {$filtroFF}
-                  {$filtroMT}
             LEFT JOIN SIG_CONTRATISTAS ct ON ct.PROVEEDOR=oa.PROVEEDOR
             /* Por fila: devengado real de la orden+ítem y ejecutado total de esa
                orden+ítem en TODOS los centros (denominador del prorrateo). */
@@ -1147,7 +1159,6 @@ class CmnQuery
         $st->bindValue(':g',  $g);  $st->bindValue(':c',  $c);
         $st->bindValue(':f',  $f);  $st->bindValue(':it', $it);
         if ($fuente !== '') $st->bindValue(':ff', $fuente);
-        if ($meta > 0)      $st->bindValue(':mt', $meta, PDO::PARAM_INT);
         $st->execute();
         $rows = $st->fetchAll();
         foreach ($rows as &$r) {
