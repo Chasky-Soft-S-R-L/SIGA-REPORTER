@@ -231,47 +231,23 @@ class CmnQuery
             ISNULL(ff.NOMBRE, D.FUENTE_FINANC)                      AS FF_NOMBRE,
             cat.NOMBRE_ITEM                                         AS NOMBRE_ITEM,
             um.NOMBRE                                               AS UNIDAD_MEDIDA,
-            /* Las tres columnas de PROGRAMADO van a 0 cuando la fila es solo una
-               inclusión (ES_INCL): no existía en el cuadro original, así que no
-               tiene nada programado. Ver la nota de ES_INCL más abajo. */
-            CASE WHEN D.ES_INCL = 1 THEN 0
-                 WHEN D.TIPO_BIEN='S'
+            CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN ISNULL(ori.MNTO_TOTAL,0) > 0 THEN 1 ELSE 0 END
                  WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.CANT_TOTAL, 0)
-                 WHEN ISNULL(D.MOD_ITEM,0) > 0
-                      THEN ROUND(ISNULL(ori.CANT_TOTAL, 0)
-                           * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT)), 4)
-                 ELSE ROUND(ISNULL(ori.CANT_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0), 4)
+                 ELSE ROUND(ISNULL(ori.CANT_TOTAL, 0)
+                      * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                             ELSE 1.0 / D.GRUPOS_ITEM END, 4)
             END                                                     AS CANTIDAD_PROG,
-            CASE WHEN D.ES_INCL = 1 THEN 0
-                 WHEN D.TIPO_BIEN='S'
+            CASE WHEN D.TIPO_BIEN='S'
                  THEN CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
-                           WHEN ISNULL(D.MOD_ITEM,0) > 0
-                                THEN ISNULL(ori.MNTO_TOTAL, 0)
-                                     * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
-                           ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0) END
+                           ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                                * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                                       ELSE 1.0 / D.GRUPOS_ITEM END, 2) END
                  ELSE ISNULL(ori.PRECIO_UNIT, 0) END                AS PRECIO_UNIT_PROG,
-            /* IMPORTE_PROG: SIN ROUND en la rama prorrateada. Redondear cada
-               línea a 2 decimales hacía que la suma de las partes no diera el
-               total del original (el reporte marcaba 194 346.31 contra los
-               194 346.39 del SIGA). Guardando el valor exacto, cada celda se
-               muestra redondeada pero el TOTAL cuadra al céntimo. */
-            CASE WHEN D.ES_INCL = 1 THEN 0
-                 WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
-                 WHEN ISNULL(D.MOD_ITEM,0) > 0
-                      /* CAST A FLOAT EN EL COCIENTE · no es cosmético.
-                         MOD_ITEM sale de SUM(SUM(MNTO_VIG)) OVER(...), que acumula
-                         precisión numeric alta. Cuando el resultado de la división
-                         pasaría de precisión 38, SQL Server RECORTA la escala hasta
-                         su mínimo de 6 decimales: 36000/79200 = 0.454545454545… se
-                         trunca a 0.454545 y al multiplicar por 79200 da 35 999.964
-                         en vez de 36 000. Repetido en varias líneas, eso producía
-                         los 0.08 de descuadre contra el SIGA (194 346.31 vs
-                         194 346.39). El FLOAT conserva ~15 dígitos significativos,
-                         de sobra para importes de esta magnitud. */
-                      THEN ISNULL(ori.MNTO_TOTAL, 0)
-                           * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
-                 ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0)
+            CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                 ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                      * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                             ELSE 1.0 / D.GRUPOS_ITEM END, 2)
             END                                                     AS IMPORTE_PROG,
             CASE WHEN D.TIPO_BIEN='S' THEN 1 ELSE D.CANT_TOTAL END  AS CANTIDAD_MOD,
             CASE WHEN D.TIPO_BIEN='S' THEN D.MNTO_TOTAL
@@ -333,12 +309,10 @@ class CmnQuery
                se programó (sobregiro respecto al cuadro original). Se repite aquí la
                misma expresión de IMPORTE_PROG porque SQL Server no permite referenciar
                el alias de una columna dentro del mismo SELECT. */
-            (CASE WHEN D.ES_INCL = 1 THEN 0
-                  WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
-                  WHEN ISNULL(D.MOD_ITEM,0) > 0
-                       THEN ISNULL(ori.MNTO_TOTAL, 0)
-                            * (CAST(D.MNTO_TOTAL AS FLOAT) / CAST(D.MOD_ITEM AS FLOAT))
-                  ELSE ISNULL(ori.MNTO_TOTAL, 0) / NULLIF(CAST(D.GRUPOS_ITEM AS FLOAT),0)
+            (CASE WHEN D.GRUPOS_ITEM <= 1 THEN ISNULL(ori.MNTO_TOTAL, 0)
+                  ELSE ROUND(ISNULL(ori.MNTO_TOTAL, 0)
+                       * CASE WHEN ISNULL(D.MOD_ITEM,0) > 0 THEN D.MNTO_TOTAL / D.MOD_ITEM
+                              ELSE 1.0 / D.GRUPOS_ITEM END, 2)
              END)
             -
             ISNULL(dev.MNTO_EJEC, 0)                               AS DIFERENCIA,
@@ -362,29 +336,9 @@ class CmnQuery
                    CASE WHEN SUM(CANT_VIG) > 0 THEN SUM(MNTO_VIG) / SUM(CANT_VIG)
                         ELSE MAX(PRECIO_UNIT) END               AS PRECIO_UNIT,
                    MAX(SEC_CUA_MOD_SAL) AS SEC_CUA_MOD_SAL,
-                   /* ES_INCL = esta fila del cuadro es SOLO una inclusión: todas
-                      sus líneas entraron por modificación (I/IT) y ninguna venía
-                      del cuadro aprobado. Una inclusión NO existía en el cuadro
-                      original, así que su Importe Programado debe ser 0 — no una
-                      porción prorrateada del original de otra línea del mismo
-                      ítem. Reportado por el área usuaria: 3 inclusiones de
-                      servicios recibían importe programado que no les tocaba. */
-                   CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
-                        THEN 1 ELSE 0 END                                         AS ES_INCL,
-                   /* MOD_ITEM / GRUPOS_ITEM son el denominador del prorrateo del
-                      cuadro original entre las líneas que comparten centro+ítem.
-                      Las inclusiones se EXCLUYEN del reparto (aportan 0): el
-                      original pertenece solo a las líneas que ya venían del
-                      cuadro aprobado. Antes se repartía entre todas y las
-                      inclusiones se llevaban una parte, descuadrando el total
-                      contra el SIGA. */
-                   SUM(CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
-                            THEN 0 ELSE SUM(MNTO_VIG) END)
-                        OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                   SUM(SUM(MNTO_VIG)) OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
                         GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS MOD_ITEM,
-                   SUM(CASE WHEN SUM(LIN_APROB) + SUM(LIN_OTRO) = 0 AND SUM(LIN_INCL) > 0
-                            THEN 0 ELSE 1 END)
-                        OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
+                   COUNT(*)           OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
                         GRUPO_BIEN, CLASE_BIEN, FAMILIA_BIEN, ITEM_BIEN)          AS GRUPOS_ITEM,
                    SUM(SUM(MNTO_VIG)) OVER (PARTITION BY CENTRO_COSTO, TIPO_BIEN,
                         TIPO_TAREA, NIVEL_TAREA, CODIGO_TAREA,
