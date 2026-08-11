@@ -251,9 +251,7 @@ class ExportService
      * COMPUESTOS de index.php, para que Excel y pantalla agrupen igual.
      */
     private const COMPUESTOS = [
-        'CLASIF_FF'     => ['CLASIF_COD', 'FF'],
-        // Actividad + Clasificador + Fuente = la línea presupuestal real.
-        'ACT_CLASIF_FF' => ['ACTIV_OPERAT_COD', 'CLASIF_COD', 'FF'],
+        'CLASIF_FF' => ['CLASIF_COD', 'FF'],
     ];
 
     /** Separador interno de las claves compuestas (no aparece en la salida). */
@@ -299,13 +297,6 @@ class ExportService
         if ($by === 'CLASIF_FF') {
             $d = $items[0];
             return ($d['CLASIF_COD'] ?? '').'  '.($d['CLASIF_NOMBRE'] ?? '')
-                 .'   ·   FF '.($d['FF'] ?? '—')
-                 .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '');
-        }
-        if ($by === 'ACT_CLASIF_FF') {
-            $d = $items[0];
-            return ($d['ACTIV_OPERAT_COD'] ?? '').'  '.($d['ACTIV_OPERAT_NOMBRE'] ?? '')
-                 .'   ·   '.($d['CLASIF_COD'] ?? '').'  '.($d['CLASIF_NOMBRE'] ?? '')
                  .'   ·   FF '.($d['FF'] ?? '—')
                  .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '');
         }

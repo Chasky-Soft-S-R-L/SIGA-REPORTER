@@ -729,14 +729,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   const COMPUESTOS={
     CLASIF_FF:{campos:['CLASIF_COD','FF'],
                lbl:(d)=>(d.CLASIF_NOMBRE||d.CLASIF_COD||'Sin clasificador')
-                        +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')},
-    /* Actividad + Clasificador + Fuente: el nivel MÁS fino de agrupación, el
-       que corresponde a la línea presupuestal real (una actividad gasta un
-       clasificador con una fuente concreta). Genera muchos bloques pequeños,
-       así que conviene usarlo con un centro ya filtrado, no con todos. */
-    ACT_CLASIF_FF:{campos:['ACTIV_OPERAT_COD','CLASIF_COD','FF'],
-               lbl:(d)=>(d.ACTIV_OPERAT_NOMBRE||d.ACTIV_OPERAT_COD||'Sin actividad')
-                        +'   ·   '+(d.CLASIF_NOMBRE||d.CLASIF_COD||'Sin clasificador')
                         +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')}
   };
   const SEP='\u2225';

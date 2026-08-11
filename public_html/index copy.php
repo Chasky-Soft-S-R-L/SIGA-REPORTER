@@ -718,37 +718,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   function grpColor(v){let h=0;const s=(v||'').toString();for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return ACT_PAL[h%ACT_PAL.length];}
   function grpLabel(k){const g=GROUPABLE.find(x=>x.k===groupBy);return (g?g.lbl:groupBy)+' '+ec(k);}
 
-  /* CLAVE DE GRUPO · admite campos COMPUESTOS.
-     'CLASIF_FF' agrupa por Clasificador Y Fuente a la vez: dos filas del mismo
-     clasificador financiadas con distinta fuente van a bloques separados, que
-     es como Presupuestos revisa el cuadro (el clasificador solo no distingue
-     de qué bolsa sale el dinero). La clave se arma con un separador poco
-     habitual (∥) para que no choque con el contenido de los códigos.
-     Para añadir otro campo compuesto: una entrada en COMPUESTOS y su etiqueta
-     en Labels::GROUP_BY / GROUP_BY_SELECT (column_labels.php). */
-  const COMPUESTOS={
-    CLASIF_FF:{campos:['CLASIF_COD','FF'],
-               lbl:(d)=>(d.CLASIF_NOMBRE||d.CLASIF_COD||'Sin clasificador')
-                        +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')},
-    /* Actividad + Clasificador + Fuente: el nivel MÁS fino de agrupación, el
-       que corresponde a la línea presupuestal real (una actividad gasta un
-       clasificador con una fuente concreta). Genera muchos bloques pequeños,
-       así que conviene usarlo con un centro ya filtrado, no con todos. */
-    ACT_CLASIF_FF:{campos:['ACTIV_OPERAT_COD','CLASIF_COD','FF'],
-               lbl:(d)=>(d.ACTIV_OPERAT_NOMBRE||d.ACTIV_OPERAT_COD||'Sin actividad')
-                        +'   ·   '+(d.CLASIF_NOMBRE||d.CLASIF_COD||'Sin clasificador')
-                        +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')}
-  };
-  const SEP='\u2225';
-  function grpKey(d){
-    const c=COMPUESTOS[groupBy];
-    if(c) return c.campos.map(f=>(d[f]==null||d[f]==='')?'—':d[f]).join(SEP);
-    return (d[groupBy]==null||d[groupBy]==='')?'—':d[groupBy];
-  }
-  /* Texto corto del chip del bloque: para claves compuestas se muestran los
-     valores separados por · en vez de la clave cruda con el separador. */
-  function grpChip(k){ return COMPUESTOS[groupBy] ? k.split(SEP).join(' · ') : k; }
-
   /* ═══════════════ SELECTOR DE CAMPOS ═══════════════
      Columnas virtuales (__) + columnas reales de HEADERS (ambas vienen de
      Labels, ver column_labels.php). El orden de la tabla siempre respeta el
@@ -1169,7 +1138,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
     let html='';
     if(agrupar && groupBy){
-      const g={};vista.forEach((d)=>{const k=grpKey(d);(g[k]=g[k]||[]).push(d);});
+      const g={};vista.forEach((d)=>{const k=(d[groupBy]==null||d[groupBy]==='')?'—':d[groupBy];(g[k]=g[k]||[]).push(d);});
       const keys=Object.keys(g).sort();
       keys.forEach((k,gi)=>{
         const items=g[k].sort((a,b)=>codBien(a)<codBien(b)?-1:codBien(a)>codBien(b)?1:0);
@@ -1181,8 +1150,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
               sDev=items.reduce((s,x)=>s+ +x.DEVENGADO,0),sSaldo=items.reduce((s,x)=>s+ +x.SALDO_DEVENGAR,0);
         const pct=sM>0?Math.min(100,sE/sM*100):0;
         /* nombre del grupo: usa el nombre descriptivo según el campo agrupado */
-        const gname = COMPUESTOS[groupBy]     ? COMPUESTOS[groupBy].lbl(items[0])
-                    : groupBy==='ACTIV_OPERAT_COD' ? (items[0].ACTIV_OPERAT_NOMBRE||'Sin actividad')
+        const gname = groupBy==='ACTIV_OPERAT_COD' ? (items[0].ACTIV_OPERAT_NOMBRE||'Sin actividad')
                     : groupBy==='CLASIF_COD'        ? (items[0].CLASIF_NOMBRE||'Sin descripción')
                     : groupBy==='FF'                ? (items[0].FF_NOMBRE||k)
                     : groupBy==='META'              ? ('Meta '+k)
@@ -1195,7 +1163,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         html+='<tr class="ghead cursor-pointer select-none" data-act="'+ec(k)+'"><td colspan="'+nCols+'" class="p-0">'
           +'<div class="flex items-center gap-2.5 px-2.5 py-2 text-white sticky left-0" style="background:'+c[0]+';width:calc(100vw - 2rem);max-width:100%">'
             +'<i class="fa-solid '+(cerrado?'fa-chevron-right':'fa-chevron-down')+' text-[10px] w-3 shrink-0 opacity-90"></i>'
-            +'<span class="px-2 py-0.5 rounded-sm text-[10px] font-black tracking-widest shrink-0" style="background:rgba(255,255,255,.22)">'+ec(grpChip(k))+'</span>'
+            +'<span class="px-2 py-0.5 rounded-sm text-[10px] font-black tracking-widest shrink-0" style="background:rgba(255,255,255,.22)">'+ec(k)+'</span>'
             +'<span class="text-[12px] font-bold truncate uppercase tracking-wide">'+ec(gname)+'</span>'
             +'<span class="px-1.5 py-0.5 rounded-full text-[10px] font-bold shrink-0" style="background:rgba(255,255,255,.9);color:'+c[0]+'">'+items.length+' ítems</span>'
             +'<div class="ml-auto flex items-center gap-3 shrink-0">'
@@ -1209,7 +1177,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
 
         if(!cerrado){
           items.forEach((d,ri)=>{html+=tr1(d,rows.indexOf(d),c,ri%2===1);});
-          html+=rowTotalesMark('Sub Total  ·  '+ec(grpChip(k)),{P:sP,M:sM,E:sE,D:sD,Dev:sDev,Saldo:sSaldo},{
+          html+=rowTotalesMark('Sub Total  ·  '+ec(k),{P:sP,M:sM,E:sE,D:sD,Dev:sDev,Saldo:sSaldo},{
             trCls:'gsub font-bold text-[11px]',
             trStyle:'background:'+c[0]+'26;box-shadow:inset 5px 0 0 '+c[0]+';border-top:2px solid '+c[0]+';border-bottom:2px solid '+c[0]+'59;color:'+c[0],
             lblCls:'uppercase'});
@@ -1854,7 +1822,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   sortEl.addEventListener('change',()=>{st.sort=sortEl.value;if(st.sort==='act_item'){agrupar=true;$('agrupar').checked=true;}st.page=1;load();});
   $('gExpand').addEventListener('click',()=>{colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}paint();});
   $('gCollapse').addEventListener('click',()=>{if(!agrupar){agrupar=true;$('agrupar').checked=true;}
-    last.rows.forEach(d=>colapsados.add(grpKey(d)));paint();});
+    last.rows.forEach(d=>colapsados.add((d[groupBy]==null||d[groupBy]==='')?'—':d[groupBy]));paint();});
   $('groupBy').addEventListener('change',e=>{groupBy=e.target.value;colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}updateExport();paint();});
   $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;updateExport();st.page=1;load();});
   perPageEl.addEventListener('change',()=>{st.perPage=+perPageEl.value;st.page=1;load();});

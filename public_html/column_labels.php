@@ -161,6 +161,8 @@ final class Labels
         'GENERICA'         => 'Genérica',
         'FF'               => 'Fuente financiamiento',
         'ESTADO_FASE'      => 'Fase (estado)',
+        'CLASIF_FF'        => 'Clasificador + Fuente',
+          'ACT_CLASIF_FF'    => 'Actividad + Clasificador + Fuente',
     ];
 
     /** Mismos campos, texto corto para el <select id="groupBy"> ("por X"). */
@@ -171,6 +173,8 @@ final class Labels
         'GENERICA'         => 'por Genérica',
         'FF'               => 'por Fuente Financ.',
         'ESTADO_FASE'      => 'por Fase',
+        'CLASIF_FF'        => 'por Clasif. + Fuente',
+         'ACT_CLASIF_FF'    => 'por Act. + Clasif. + FF',
     ];
 
     /** Opciones del <select id="sort"> · clave = valor enviado al servidor. */

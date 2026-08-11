@@ -243,43 +243,12 @@ class ExportService
         return implode(', ', $abrev);
     }
 
-    /**
-     * Campos de agrupación COMPUESTOS (varios campos a la vez).
-     * 'CLASIF_FF' agrupa por Clasificador Y Fuente: dos filas del mismo
-     * clasificador financiadas con distinta fuente van a bloques separados,
-     * que es como Presupuestos revisa el cuadro. Debe coincidir con el mapa
-     * COMPUESTOS de index.php, para que Excel y pantalla agrupen igual.
-     */
-    private const COMPUESTOS = [
-        'CLASIF_FF'     => ['CLASIF_COD', 'FF'],
-        // Actividad + Clasificador + Fuente = la línea presupuestal real.
-        'ACT_CLASIF_FF' => ['ACTIV_OPERAT_COD', 'CLASIF_COD', 'FF'],
-    ];
-
-    /** Separador interno de las claves compuestas (no aparece en la salida). */
-    private const SEP = "\u{2225}";
-
-    /** Clave de grupo de una fila, simple o compuesta. */
-    private static function grpKey(array $r, string $by): string
-    {
-        if (isset(self::COMPUESTOS[$by])) {
-            $partes = [];
-            foreach (self::COMPUESTOS[$by] as $campo) {
-                $v = (string)($r[$campo] ?? '');
-                $partes[] = $v === '' ? '—' : $v;
-            }
-            return implode(self::SEP, $partes);
-        }
-        $v = (string)($r[$by] ?? '');
-        return $v === '' ? '—' : $v;
-    }
-
-    /** Agrupa las filas por el campo indicado y ordena por código de bien. */
+    /** Agrupa las filas por actividad operativa y ordena por código de bien. */
     private static function agrupar(array $rows, string $by = 'ACTIV_OPERAT_COD'): array
     {
         $g = [];
         foreach ($rows as $r) {
-            $g[self::grpKey($r, $by)][] = $r;
+            $g[$r[$by] ?? '—'][] = $r;
         }
         ksort($g);
         foreach ($g as &$items) {
@@ -296,19 +265,6 @@ class ExportService
     /** Etiqueta legible del grupo según el campo por el que se agrupó. */
     private static function grupoLabel(array $items, string $by, string $key): string
     {
-        if ($by === 'CLASIF_FF') {
-            $d = $items[0];
-            return ($d['CLASIF_COD'] ?? '').'  '.($d['CLASIF_NOMBRE'] ?? '')
-                 .'   ·   FF '.($d['FF'] ?? '—')
-                 .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '');
-        }
-        if ($by === 'ACT_CLASIF_FF') {
-            $d = $items[0];
-            return ($d['ACTIV_OPERAT_COD'] ?? '').'  '.($d['ACTIV_OPERAT_NOMBRE'] ?? '')
-                 .'   ·   '.($d['CLASIF_COD'] ?? '').'  '.($d['CLASIF_NOMBRE'] ?? '')
-                 .'   ·   FF '.($d['FF'] ?? '—')
-                 .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '');
-        }
         if ($by === 'ACTIV_OPERAT_COD') return $key.'   '.($items[0]['ACTIV_OPERAT_NOMBRE'] ?? '');
         if ($by === 'CLASIF_COD')       return $key.'   '.($items[0]['CLASIF_NOMBRE'] ?? '');
         if ($by === 'FF')               return $key.'   '.($items[0]['FF_NOMBRE'] ?? '');
@@ -583,7 +539,7 @@ class ExportService
                 }
                 // Sub total del bloque
                 echo self::filaTotales(
-                    'Sub Total  ·  ' . str_replace(self::SEP, ' · ', (string)$act),
+                    'Sub Total  ·  ' . $act,
                     self::totales($items),
                     'background:' . $claro . ';font-weight:bold;color:' . $fuerte . ';border-top:1px solid ' . $fuerte . ';',
                     'background:' . $claro . ';font-weight:bold;color:' . $fuerte . ';text-align:right;border-top:1px solid ' . $fuerte
