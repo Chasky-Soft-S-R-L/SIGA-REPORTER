@@ -68,7 +68,7 @@ final class Labels
         'CANTIDAD_EJEC'       => 'CANTIDAD',
         'PRECIO_UNIT_EJEC'    => 'PRECIO UNITARIO',
         'IMPORTE_EJEC'        => 'IMPORTE CMN EJECUTADO',
-        'DIFERENCIA'          => 'DIFERENCIA',
+        'DIFERENCIA'          => 'SALDO PROG-EJEC',
         'ESTADO_EJEC'         => 'ESTADO',
         'RESPONSABLE'         => 'RESPONSABLE',
         'DEVENGADO'           => 'DEVENGADO',
@@ -79,7 +79,7 @@ final class Labels
     /** Columnas que sólo existen en pantalla (no vienen del SQL, no van al Excel/PDF). */
     public const VIRTUAL_COLUMNS = [
         '__FASE' => 'Indicador de fase',
-        '__CMN'  => 'Estado CMN',
+        // '__CMN'  => 'Estado CMN',
     ];
 
     /** Columnas enteras (sin decimales). Copia exacta de ExportService::INT. */
@@ -143,7 +143,7 @@ final class Labels
         'ESTADO_ORDEN'        => 170,
         // virtuales
         '__FASE'              => 30,
-        '__CMN'               => 150,
+        // '__CMN'               => 150,
     ];
 
     /** Las 3 fases del gasto: clave interna → texto mostrado en chip/kanban/grupo. */

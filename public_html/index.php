@@ -740,7 +740,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','__CMN','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
     financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
@@ -1037,7 +1037,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         const w='width:'+colWidth(k)+'px;min-width:'+colWidth(k)+'px;max-width:'+colWidth(k)+'px;';
         const st=' style="'+w+(fh?'background:'+fh[0]+';color:'+FASE_TXT+';':'')+'"';
         if(k==='__FASE') return '<th class="px-2 py-2"'+st+'></th>';
-        if(k==='__CMN')  return '<th class="px-2 py-2 font-semibold text-left"'+st+'>ESTADO CMN</th>';
         return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';
       }).join('');
     if(!vista.length){tbodyEl.innerHTML='<tr><td colspan="'+nCols+'" class="px-3 py-6 text-center text-gray-400">'+(aislar&&SEL.size?'No hay filas seleccionadas en esta página':'Sin resultados')+'</td></tr>';tfootEl.innerHTML='';selBar();return;}
@@ -1073,7 +1072,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         const wTrunc=wCss+'overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
         if(k==='__FASE') return '<td class="py-1 text-center px-2" style="'+wCss+'" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
-        if(k==='__CMN')  return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><div class="flex flex-wrap gap-1">'+cmnBadge(d)+'</div></td>';
         if(k==='ESTADO_ORDEN'){
           /* Antes usaba flex-wrap: con varias órdenes las badges saltaban a
              2-3 líneas y agrandaban toda la fila. Ahora es una sola línea
@@ -1097,9 +1095,13 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
              Mismo criterio que ExportService::estadoEjec, para que pantalla y
              Excel digan lo mismo. */
           const est=estadoEjecTxt(d);
+          /* Excluido en ROJO FUERTE: es un aviso (el ítem salió del cuadro),
+             no un estado neutro. Pendiente pasa a ÁMBAR para no competir con
+             él — antes ambos habrían salido en rojo y el aviso se perdía.
+             Mismo criterio que el Excel (rojo / negro / azul). */
           const cls=est==='Ejecutado'?'bg-primary/15 text-primary-dark'
-                   :est==='Excluido' ?'bg-gray-200 text-gray-600'
-                                     :'bg-red-100 text-red-700';
+                   :est==='Excluido' ?'bg-red-600 text-white'
+                                     :'bg-amber-100 text-amber-700';
           return '<td class="px-2 py-1" style="'+wCss+'overflow:hidden"><span class="inline-block px-1.5 py-0.5 rounded-full text-[10px] font-semibold '
                +cls+'">'+est+'</span></td>';
         }

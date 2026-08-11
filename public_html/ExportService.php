@@ -122,7 +122,7 @@ class ExportService
      * Envolviendo a dos líneas el encabezado se lee completo sin ensanchar
      * las columnas de dato.
      */
-    private const WRAPHEAD = 'white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;';
+    private const WRAPHEAD = 'white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;font-size:10pt;';
 
     /** Color estable por código de actividad (mismo criterio que el frontend). */
     private static function actColor(string $cod): array
@@ -340,13 +340,16 @@ class ExportService
                 // TRES estados, cada uno con su color:
                 //   Ejecutado → azul   (ya se compró)
                 //   Pendiente → negro  (vigente, aún sin comprar)
-                //   Excluido  → gris   (salió del cuadro, ya no se va a comprar)
+                //   Excluido  → ROJO   (salió del cuadro, ya no se va a comprar).
+                //     Va en rojo a propósito: es un AVISO, no un estado neutro —
+                //     quien revisa el cuadro debe detectar de un vistazo lo que
+                //     se retiró de la programación.
                 // Se recalcula con estadoEjec() en vez de confiar en el valor
                 // que traiga la fila, para que el Excel diga lo mismo aunque se
                 // exporte desde otro punto del sistema.
                 $texto = self::estadoEjec($r);
                 $color = ($texto === 'Ejecutado') ? '#0000FF'
-                       : (($texto === 'Excluido') ? '#7F7F7F' : '#000000');
+                       : (($texto === 'Excluido') ? '#C00000' : '#000000');
                 $out .= '<td style="' . $base . 'mso-number-format:\'@\';color:' . $color . ';font-weight:bold">'
                       . htmlspecialchars(mb_strtoupper($texto, 'UTF-8')) . '</td>';
             } elseif ($key === 'ESTADO_FASE') {
@@ -427,7 +430,7 @@ class ExportService
              tipo "2.3.2 9.1 1" y los códigos de ítem con ceros a la izquierda). */
         echo '<style>'
            . 'td{white-space:nowrap;vertical-align:middle;mso-rotate:0}'
-           . 'th{white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15}'
+           . 'th{white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;font-size:10pt}'
            . 'br{mso-data-placement:same-cell}'
            . '</style>';
         echo '<!--[if gte mso 9]><xml>'
@@ -461,14 +464,21 @@ class ExportService
         }
         echo '</colgroup>';
 
-        // ── Cabecera institucional ──
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:15px;font-weight:bold;color:#14967d">'
+        /* ── Cabecera institucional ──
+           Las tres filas van CENTRADAS sobre el ancho completo de la tabla.
+           El colspan por sí solo no centra: Excel alinea el contenido a la
+           izquierda de la primera celda combinada, así que hace falta el
+           text-align:center explícito. Se usa mso-number-format:'@' para que
+           Excel no intente reinterpretar el texto (p.ej. la fecha de
+           "Generado" como número de serie). */
+        $hdrCenter = self::NOWRAP . 'text-align:center;mso-number-format:\'@\';';
+        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:15px;font-weight:bold;color:#14967d">'
            . htmlspecialchars(self::unaLinea($titulo)) . '</td></tr>';
         // El centro ya viene con el responsable del área anexado desde index.php
         // ("104.07.03.01 · OFICINA … · Resp.: BAUTISTA MELENDEZ VICTOR MANUEL").
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:11px;color:#334155">'
+        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:11px;color:#334155">'
            . htmlspecialchars(self::unaLinea($centro)) . '</td></tr>';
-        echo '<tr><td colspan="' . $nCols . '" style="' . self::NOWRAP . 'font-size:9px;color:#64748b">Generado: '
+        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:9px;color:#64748b">Generado: '
            . date('d/m/Y H:i') . '</td></tr>';
         echo '<tr><td colspan="' . $nCols . '"></td></tr>';
 
