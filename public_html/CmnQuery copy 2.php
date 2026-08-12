@@ -269,16 +269,6 @@ class CmnQuery
                (mostraba certificados de otros ítems de la misma línea). */
             COALESCE(ej.ORDENES, 'PENDIENTE')                       AS ESTADO_ORDEN,
             ISNULL(per.nombre_completo, '')                        AS RESPONSABLE,
-            /* CERTIFICACIÓN DE LA LÍNEA DEL CUADRO · equivale al check Cert
-               del SIGA. Nada que ver con la certificación que aparece en DATOS
-               EJECUCION: aquella cuelga de la ORDEN y solo existe si el ítem ya
-               tiene orden emitida; ésta cuelga del CONSOLIDADO PAAC y marca la
-               línea en cuanto Logística la certifica, haya orden o no. En el
-               centro 104.08.05.01: 46 de 55 líneas certificadas por esta vía,
-               bastantes más de las que tienen orden. */
-            certL.NRO_CERTIFICA                                    AS CERT_SIGA,
-            certL.NRO_CERTIFICA_SIAF                               AS CERT_SIAF,
-            ISNULL(certL.ANULADO_FLAG, 0)                          AS CERT_ANULADA,
             STUFF(  CASE WHEN D.LIN_APROB > 0 OR D.LIN_OTRO > 0 THEN ', PROGRAMADO' ELSE '' END
                   + CASE WHEN D.LIN_INCL  > 0 THEN ', INCLUIDO' ELSE '' END
                   + CASE WHEN D.LIN_EXCL  > 0 THEN ', EXCLUIDO' ELSE '' END
@@ -498,29 +488,6 @@ class CmnQuery
              ON resp.SEC_EJEC=D.SEC_EJEC AND resp.ANNO_EJEC=D.ANNO_EJEC AND resp.SEC_CUA_MOD_SAL=D.SEC_CUA_MOD_SAL
         LEFT JOIN SIG_PERSONAL per
              ON per.sec_ejec=D.SEC_EJEC AND per.empleado=resp.EMPLEADO
-        /* Certificación de la línea, vía el consolidado PAAC:
-             SEC_CUA_MOD_SAL → SIG_CUADRO_MODIFICADO_CMN → NRO_CONSOLID
-                             → SIG_CERTIFICACION_DOC     → NRO_CERTIFICA
-                             → SIG_CERTIFICACION (cabecera: SIAF + ANULADO)
-           TOP 1 porque una línea podría figurar en más de un documento de
-           certificación; se toma la más reciente (NRO_CERTIFICA más alto). */
-        OUTER APPLY (
-            SELECT TOP 1
-                   cd.NRO_CERTIFICA,
-                   NULLIF(cab.NRO_CERTIFICA_SIAF, 0) AS NRO_CERTIFICA_SIAF,
-                   CASE WHEN ISNULL(cab.ANULADO,0)=0 THEN 0 ELSE 1 END AS ANULADO_FLAG
-            FROM   SIG_CUADRO_MODIFICADO_CMN cmn2
-            JOIN   SIG_CERTIFICACION_DOC cd
-                   ON cd.SEC_EJEC=cmn2.SEC_EJEC AND cd.ANO_EJE=cmn2.ANNO_EJEC
-                  AND cd.TIPO_CONSOLID=cmn2.TIPO_CONSOLID AND cd.NRO_CONSOLID=cmn2.NRO_CONSOLID
-                  AND cd.TIPO_GENERACION=cmn2.TIPO_GENERACION AND cd.TIPO_BIEN=cmn2.TIPO_BIEN
-            LEFT JOIN SIG_CERTIFICACION cab
-                   ON cab.SEC_EJEC=cd.SEC_EJEC AND cab.ANO_EJE=cd.ANO_EJE
-                  AND cab.NRO_CERTIFICA=cd.NRO_CERTIFICA
-            WHERE  cmn2.SEC_EJEC=D.SEC_EJEC AND cmn2.ANNO_EJEC=D.ANNO_EJEC
-              AND  cmn2.SEC_CUA_MOD_SAL=D.SEC_CUA_MOD_SAL
-            ORDER BY cd.NRO_CERTIFICA DESC
-        ) certL
         LEFT JOIN (
             /* FIX: agrupado por CENTRO + TAREA + ÍTEM (misma clave que `dev`,
                vía SIG_DEPEN_META_CUADRO) en vez de META + CLASIFICADOR + ÍTEM.

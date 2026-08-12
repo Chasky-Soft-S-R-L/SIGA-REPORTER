@@ -37,6 +37,7 @@ final class Labels
 
         'CCOSTO_COD'          => 'CCOSTO_COD',
         'CCOSTO_NOMBRE'       => 'CCOSTO_NOMBRE',
+         'CERT_SIGA'           => 'CERT',
         'ESTADO_CMN'          => 'ESTADO CMN',
         'ESTADO_FASE'         => 'FASE',
         // 'NRO_LINEAS'          => 'N° LÍNEAS',
@@ -102,6 +103,7 @@ final class Labels
      * el mismo orden que COLUMNS solo por prolijidad al leer el archivo.
      */
     public const WIDTHS = [
+        'CERT_SIGA'           => 60,
         'CCOSTO_COD'          => 90,
         'CCOSTO_NOMBRE'       => 190,
         'ESTADO_CMN'          => 100,
@@ -155,6 +157,7 @@ final class Labels
 
     /** Campos por los que se puede agrupar la tabla → texto largo (panel de campos). */
     public const GROUP_BY = [
+                         'ACT_FF_RB_META_USO' => 'Actividad + FF + Rubro + Meta + Tipo uso',
         'ACTIV_OPERAT_COD' => 'Actividad operativa',
         'CLASIF_COD'       => 'Clasificador',
         'META'             => 'Meta',
@@ -163,10 +166,12 @@ final class Labels
         'ESTADO_FASE'      => 'Fase (estado)',
         'CLASIF_FF'        => 'Clasificador + Fuente',
           'ACT_CLASIF_FF'    => 'Actividad + Clasificador + Fuente',
+
     ];
 
     /** Mismos campos, texto corto para el <select id="groupBy"> ("por X"). */
     public const GROUP_BY_SELECT = [
+               'ACT_FF_RB_META_USO' => 'por Act. + FF + Meta + Uso',
         'ACTIV_OPERAT_COD' => 'por Actividad',
         'CLASIF_COD'       => 'por Clasificador',
         'META'             => 'por Meta',
@@ -175,6 +180,7 @@ final class Labels
         'ESTADO_FASE'      => 'por Fase',
         'CLASIF_FF'        => 'por Clasif. + Fuente',
          'ACT_CLASIF_FF'    => 'por Act. + Clasif. + FF',
+  
     ];
 
     /** Opciones del <select id="sort"> · clave = valor enviado al servidor. */

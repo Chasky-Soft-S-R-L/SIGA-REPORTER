@@ -647,15 +647,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return t;
   }
 
-  /* ¿LA LÍNEA ESTÁ CERTIFICADA? · es el check "Cert" del SIGA.
-     Viene del SQL en CERT_SIGA (con CERT_SIAF y CERT_ANULADA), resuelto por la
-     cadena consolidado PAAC → SIG_CERTIFICACION_DOC → SIG_CERTIFICACION.
-     NO se deduce de DATOS EJECUCION: aquella certificación cuelga de la ORDEN
-     y solo aparece si el ítem ya tiene orden emitida, mientras que ésta marca
-     la línea en cuanto Logística la certifica. En el centro 104.08.05.01 son
-     46 de 55 líneas, bastantes más de las que tienen orden. */
-  function estaCertificado(d){ return +(d.CERT_SIGA||0) > 0; }
-
   /* ESTADO de ejecución del ítem · TRES estados. Espejo exacto de
      ExportService::estadoEjec (PHP) — si cambia uno, cambia el otro.
        Ejecutado → IMPORTE_EJEC > 0. Gana siempre: si llegó a ejecutarse, eso
@@ -722,26 +713,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* Agrupar/Ordenar dinámico. groupBy='' → sin agrupar; usa el pintado de bloques.
      Las etiquetas largas (para el panel de campos) vienen de LBL.groupBy. */
   const GROUPABLE=Object.entries(LBL.groupBy).map(([k,lbl])=>({k,lbl}));
-  /* El agrupador elegido PERSISTE entre sesiones (localStorage), igual que el
-     selector de campos: quien revisa el cuadro suele volver siempre al mismo
-     corte. Se valida contra LBL.groupBy para que una clave vieja o borrada de
-     column_labels.php no deje la tabla sin agrupar. */
-  const LS_GROUP='siga.groupby.v1';
-  /* Por defecto: la cabecera presupuestal completa (Actividad + FF + Rubro +
-     Meta + Tipo uso), el mismo corte que muestra la ventana del SIGA. Solo se
-     usa la primera vez; después manda lo que el usuario haya elegido, que
-     queda guardado en localStorage. */
-  let groupBy='ACT_FF_RB_META_USO';
-  (function(){
-    try{
-      const g=localStorage.getItem(LS_GROUP);
-      /* Se valida contra LBL.groupBy (column_labels.php), que es la lista real
-         de agrupadores disponibles: así una clave vieja o eliminada no deja la
-         tabla agrupando por un campo inexistente. */
-      if(g && LBL.groupBy[g]) groupBy=g;
-    }catch(e){}
-  })();
-  function saveGroupBy(){ try{ localStorage.setItem(LS_GROUP, groupBy); }catch(e){} }
+  let groupBy='ACTIV_OPERAT_COD';  // por defecto, como hoy
   /* Color estable por cualquier valor de grupo (mismo criterio que actColor). */
   function grpColor(v){let h=0;const s=(v||'').toString();for(let i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;return ACT_PAL[h%ACT_PAL.length];}
   function grpLabel(k){const g=GROUPABLE.find(x=>x.k===groupBy);return (g?g.lbl:groupBy)+' '+ec(k);}
@@ -762,28 +734,10 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
        que corresponde a la línea presupuestal real (una actividad gasta un
        clasificador con una fuente concreta). Genera muchos bloques pequeños,
        así que conviene usarlo con un centro ya filtrado, no con todos. */
-    /* Actividad + FF + Rubro + Meta + Tipo de uso: la cabecera presupuestal
-       completa tal como la presenta el SIGA en su ventana de modificación
-       (C0542 · 1-00 · 0022 · C). NO incluye clasificador: agrupa la línea de
-       gasto, no el objeto del gasto. */
-    ACT_FF_RB_META_USO:{campos:['ACTIV_OPERAT_COD','FF','RB','META','TIPO_USO'],
-               lbl:(d)=>(d.ACTIV_OPERAT_NOMBRE||d.ACTIV_OPERAT_COD||'Sin actividad')
-                        +'   ·   FF '+(d.FF||'—')+'-'+(d.RB||'—')
-                        +'   ·   Meta '+(d.META||'—')
-                        +'   ·   Uso '+(d.TIPO_USO||'—')},
     ACT_CLASIF_FF:{campos:['ACTIV_OPERAT_COD','CLASIF_COD','FF'],
                lbl:(d)=>(d.ACTIV_OPERAT_NOMBRE||d.ACTIV_OPERAT_COD||'Sin actividad')
                         +'   ·   '+(d.CLASIF_NOMBRE||d.CLASIF_COD||'Sin clasificador')
-                        +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')},
-    /* Actividad + FF + Rubro + Tipo de uso: la vista con la que Presupuestos
-       revisa de qué bolsa sale cada actividad. FF es la fuente agregada (1/2)
-       y RB el rubro detallado (00/09/13); van juntos porque el rubro solo
-       tiene sentido dentro de su fuente. */
-    ACT_FF_RB_USO:{campos:['ACTIV_OPERAT_COD','FF','RB','TIPO_USO'],
-               lbl:(d)=>(d.ACTIV_OPERAT_NOMBRE||d.ACTIV_OPERAT_COD||'Sin actividad')
-                        +'   ·   FF '+(d.FF||'—')+'-'+(d.RB||'—')
-                        +(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')
-                        +'   ·   Uso '+(d.TIPO_USO||'—')}
+                        +'   ·   FF '+(d.FF||'—')+(d.FF_NOMBRE?' · '+d.FF_NOMBRE:'')}
   };
   const SEP='\u2225';
   function grpKey(d){
@@ -817,7 +771,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     return 'Otros campos';
   }
   const PRE={
-    trabajo   :()=>ALLC.filter(k=>['__FASE','CERT_SIGA','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
+    trabajo   :()=>ALLC.filter(k=>['__FASE','META','ACTIV_OPERAT_COD','COD_PRODUCTO','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','UNIDAD_MEDIDA','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE_(PROG|MOD|EJEC)$|^DIFERENCIA$/.test(k)),
     financiero:()=>ALLC.filter(k=>['__FASE','NOMBRE_ITEM','CLASIF_COD','CLASIF_NOMBRE','FF','FF_NOMBRE','DEVENGADO','SALDO_DEVENGAR','ESTADO_EJEC'].includes(k)
                                 || /^IMPORTE|^PRECIO|^CANT|DIFERENCIA/.test(k)),
@@ -1114,7 +1068,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
         const w='width:'+colWidth(k)+'px;min-width:'+colWidth(k)+'px;max-width:'+colWidth(k)+'px;';
         const st=' style="'+w+(fh?'background:'+fh[0]+';color:'+FASE_TXT+';':'')+'"';
         if(k==='__FASE') return '<th class="px-2 py-2"'+st+'></th>';
-        if(k==='CERT_SIGA') return '<th class="px-2 py-2 font-semibold text-center"'+st+' title="Certificado presupuestalmente (equivale al check Cert del SIGA)">'+ec(HEADERS[k])+'</th>';
         return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';
       }).join('');
     if(!vista.length){tbodyEl.innerHTML='<tr><td colspan="'+nCols+'" class="px-3 py-6 text-center text-gray-400">'+(aislar&&SEL.size?'No hay filas seleccionadas en esta página':'Sin resultados')+'</td></tr>';tfootEl.innerHTML='';selBar();return;}
@@ -1148,18 +1101,6 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
            dejarlo desbordar sobre la columna vecina; el valor completo queda
            en el atributo title, visible al pasar el mouse (sin JS extra). */
         const wTrunc=wCss+'overflow:hidden;white-space:nowrap;text-overflow:ellipsis;';
-        if(k==='CERT_SIGA'){
-          /* Check verde si el ítem tiene certificación; guion gris si no.
-             El número concreto (SIGA/SIAF) se ve en DATOS EJECUCION. */
-          const cert=estaCertificado(d), anul=+(d.CERT_ANULADA||0);
-          const tip=cert
-            ? 'Certificación SIGA '+d.CERT_SIGA+(d.CERT_SIAF?' · SIAF '+d.CERT_SIAF:'')+(anul?' · ANULADA':'')
-            : 'Sin certificación';
-          return '<td class="py-1 text-center px-2" style="'+wCss+'" title="'+ec(tip)+'">'
-               +(cert?(anul?'<i class="fa-solid fa-square-xmark text-red-600"></i>'
-                            :'<i class="fa-solid fa-square-check text-emerald-600"></i>')
-                     :'<span class="text-gray-300">—</span>')+'</td>';
-        }
         if(k==='__FASE') return '<td class="py-1 text-center px-2" style="'+wCss+'" title="'+f.label+'">'
                                +'<span class="inline-block w-1.5 h-1.5 rounded-full '+f.dot+' align-middle"></span></td>';
         if(k==='ESTADO_ORDEN'){
@@ -1914,7 +1855,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   $('gExpand').addEventListener('click',()=>{colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}paint();});
   $('gCollapse').addEventListener('click',()=>{if(!agrupar){agrupar=true;$('agrupar').checked=true;}
     last.rows.forEach(d=>colapsados.add(grpKey(d)));paint();});
-  $('groupBy').addEventListener('change',e=>{groupBy=e.target.value;saveGroupBy();colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}updateExport();paint();});
+  $('groupBy').addEventListener('change',e=>{groupBy=e.target.value;colapsados.clear();if(!agrupar){agrupar=true;$('agrupar').checked=true;}updateExport();paint();});
   $('agrupar').addEventListener('change',e=>{agrupar=e.target.checked;if(agrupar){prevSort=st.sort;st.sort='act_item';}else if(st.sort==='act_item'){st.sort=prevSort||'mod_desc';}sortEl.value=st.sort;updateExport();st.page=1;load();});
   perPageEl.addEventListener('change',()=>{st.perPage=+perPageEl.value;st.page=1;load();});
   /* Cargar todos los centros (botón del formulario y del estado inicial). */
@@ -1960,10 +1901,7 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   // set selects a estado inicial
   sortEl.value=st.sort; perPageEl.value=st.perPage;
   agrupar=(st.sort==='act_item');$('agrupar').checked=agrupar;
-  /* Si la opción guardada ya no existe en el <select>, se cae al primer valor
-     disponible para no dejar el control en blanco. */
   $('groupBy').value=groupBy;
-  if(!$('groupBy').value){ groupBy=$('groupBy').options[0]&&$('groupBy').options[0].value||'ACTIV_OPERAT_COD'; $('groupBy').value=groupBy; }
   setMode('table');
   if(CC!=='') load(); else placeholder();
 })();

@@ -254,10 +254,6 @@ class ExportService
         'CLASIF_FF'     => ['CLASIF_COD', 'FF'],
         // Actividad + Clasificador + Fuente = la línea presupuestal real.
         'ACT_CLASIF_FF' => ['ACTIV_OPERAT_COD', 'CLASIF_COD', 'FF'],
-        // Cabecera presupuestal completa, como la ventana del SIGA (C0542 · 1-00 · 0022 · C).
-        'ACT_FF_RB_META_USO' => ['ACTIV_OPERAT_COD', 'FF', 'RB', 'META', 'TIPO_USO'],
-        // Actividad + Fuente + Rubro + Tipo de uso: de qué bolsa sale cada actividad.
-        'ACT_FF_RB_USO' => ['ACTIV_OPERAT_COD', 'FF', 'RB', 'TIPO_USO'],
     ];
 
     /** Separador interno de las claves compuestas (no aparece en la salida). */
@@ -305,20 +301,6 @@ class ExportService
             return ($d['CLASIF_COD'] ?? '').'  '.($d['CLASIF_NOMBRE'] ?? '')
                  .'   ·   FF '.($d['FF'] ?? '—')
                  .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '');
-        }
-        if ($by === 'ACT_FF_RB_USO') {
-            $d = $items[0];
-            return ($d['ACTIV_OPERAT_COD'] ?? '').'  '.($d['ACTIV_OPERAT_NOMBRE'] ?? '')
-                 .'   ·   FF '.($d['FF'] ?? '—').'-'.($d['RB'] ?? '—')
-                 .(($d['FF_NOMBRE'] ?? '') !== '' ? ' · '.$d['FF_NOMBRE'] : '')
-                 .'   ·   Uso '.($d['TIPO_USO'] ?? '—');
-        }
-        if ($by === 'ACT_FF_RB_META_USO') {
-            $d = $items[0];
-            return ($d['ACTIV_OPERAT_COD'] ?? '').'  '.($d['ACTIV_OPERAT_NOMBRE'] ?? '')
-                 .'   ·   FF '.($d['FF'] ?? '—').'-'.($d['RB'] ?? '—')
-                 .'   ·   Meta '.($d['META'] ?? '—')
-                 .'   ·   Uso '.($d['TIPO_USO'] ?? '—');
         }
         if ($by === 'ACT_CLASIF_FF') {
             $d = $items[0];
@@ -439,32 +421,6 @@ class ExportService
                 // filas en varias versiones de Excel; por eso se eliminó.
                 $out .= '<td style="' . $base . 'mso-number-format:\'@\'">'
                       . htmlspecialchars(self::cmnAbrev(self::unaLinea($v))) . '</td>';
-            } elseif ($key === 'CERT_SIGA') {
-                /* CERT · el check "Cert" del SIGA, en texto plano:
-                     SI   = línea certificada
-                     (vacío) = sin certificación
-                   Texto y no un símbolo (✔) a propósito: los caracteres
-                   especiales no se ven igual en todas las versiones de Excel,
-                   y un "SI" plano permite filtrar la columna directamente.
-                   El número (SIGA · SIAF) va en el title de la celda.
-                   Es la certificación de la LÍNEA DEL CUADRO (vía consolidado
-                   PAAC), distinta de la que sale en DATOS EJECUCION (que cuelga
-                   de cada orden). */
-                $nro  = (int)($r['CERT_SIGA'] ?? 0);
-                $siaf = (int)($r['CERT_SIAF'] ?? 0);
-                $anul = (int)($r['CERT_ANULADA'] ?? 0);
-                if ($nro > 0) {
-                    $marca = $anul ? 'ANULADA' : 'SI';
-                    $col   = $anul ? 'color:#C00000;' : 'color:#059669;';
-                    $tip   = 'Certificación SIGA ' . $nro
-                           . ($siaf > 0 ? ' · SIAF ' . $siaf : '')
-                           . ($anul ? ' · ANULADA' : '');
-                } else {
-                    $marca = ''; $col = ''; $tip = 'Sin certificación';
-                }
-                $out .= '<td title="' . htmlspecialchars($tip) . '" style="' . $base . $col
-                      . 'mso-number-format:\'@\';text-align:center;font-weight:bold">'
-                      . $marca . '</td>';
             } elseif ($key === 'ESTADO_ORDEN') {
                 // DATOS EJECUCION: se listan las primeras MAX_ORDENES y el resto
                 // se resume como "(+N más)". Con el ancho declarado en el
