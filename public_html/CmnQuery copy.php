@@ -80,29 +80,15 @@
  *    no el estado SIAF.
  * ══════════════════════════════════════════════════════════════════════════════
  *
- * ══════════════════════════════════════════════════════════════════════════════
- * EL VIGENTE SALE DEL DET · SIG_CUADRO_MODIFICADO_SALDO NO SE USA
- * ══════════════════════════════════════════════════════════════════════════════
- * CANT_VIG y MNTO_VIG se calculan sumando CANT_TOTAL / MNTO_TOTAL de las líneas
- * NO excluidas de SIG_CUADRO_MODIFICADO_DET, y nada más.
- *
- * Antes se prefería SIG_CUADRO_MODIFICADO_SALDO.CANT_TOTAL cuando estaba
- * poblado, cayendo al DET solo si venía en 0 (el "fix POLLO BEBE"). Esa regla
- * estaba INVERTIDA. Verificado sobre el ejercicio 2026 completo:
- *   · En las 27 filas donde saldo y DET difieren, MNTO_TOTAL SIEMPRE sigue al
- *     DET, nunca al saldo (p.ej. 191 553 × 1.00 = 191 553, con saldo 1 051 204;
- *     300 × 85 = 25 500, con saldo 260). El SIGA muestra el valor del DET.
- *   · Usar el saldo inflaba el cuadro de la entidad en ~995 800 soles
- *     (70 423 986 contra los 69 428 189 reales).
- *   · De los 81 grupos vivos con CANT_TOTAL=0 en el DET, CERO tienen saldo
- *     poblado: el saldo no rescata ningún caso, ni siquiera aquel para el que
- *     se introdujo.
- * Por eso el LEFT JOIN a la tabla de saldo se eliminó por completo. Si alguien
- * lo reintroduce, el cuadro volverá a desviarse del SIGA.
- *
- * MNTO_VIG usa MNTO_TOTAL en vez de cantidad × MAX(PRECIO_UNIT): en las 6 629
- * filas del ejercicio ambos coinciden al céntimo, pero leer el importe que el
- * SIGA ya guardó evita que un MAX(precio) equivocado altere el resultado.
+ * NOTA SOBRE CANT_VIG / MNTO_VIG (fix POLLO BEBE, sec_cua_mod_sal con saldo 0):
+ *   El vigente sale de COALESCE(NULLIF(MAX(s.CANT_TOTAL),0), SUM(det no excluido)).
+ *   El NULLIF(...,0) es clave: SIG_CUADRO_MODIFICADO_SALDO a veces trae CANT_TOTAL=0
+ *   (saldo sin poblar) para un ítem que SÍ está vigente en el DET (estado 'C', 300
+ *   und). Sin el NULLIF, COALESCE(0, 300) = 0 y el importe modificado caía a 0
+ *   (el precio se salvaba por otra rama, por eso se veía 3.00 × 0 = 0). Verificado
+ *   en el centro 104.07.13.03.16: 0 casos de "saldo 0 legítimo", así que tratar el
+ *   saldo 0 como "sin dato" (y caer al DET) es correcto. El CASE externo
+ *   "... = 0 THEN 0" sigue cubriendo el caso legítimo de todo-excluido → vigente 0.
  *
  * FIX DATOS_EJECUCION (ESTADO_ORDEN) · billing scope bug:
  *   El bloque `ej` (lista de órdenes tipo "OS 171 · DEVENGADO · Cert SIGA 211 ·
@@ -370,20 +356,18 @@ class CmnQuery
                        MAX(d.CLASE_BIEN)    AS CLASE_BIEN,     MAX(d.FAMILIA_BIEN) AS FAMILIA_BIEN,
                        MAX(d.ITEM_BIEN)     AS ITEM_BIEN,      MAX(d.UNIDAD_MEDIDA) AS UNIDAD_MEDIDA,
                        MAX(d.PRECIO_UNIT)   AS PRECIO_UNIT,
-                       /* CANT_VIG / MNTO_VIG salen DIRECTO del DET, sumando solo
-                          las líneas no excluidas. Ver la nota EL VIGENTE SALE
-                          DEL DET en la cabecera del archivo: la tabla de saldo
-                          NO manda y usarla inflaba el cuadro ~995 800 soles. */
+                       /* CANT_VIG: NULLIF(...,0) trata un saldo=0 como \"sin dato de
+                          saldo\" y cae a la suma del DET (fix POLLO BEBE). El CASE
+                          externo sigue devolviendo 0 solo si TODO está excluido. */
                        CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
-                            ELSE SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END)
+                            ELSE COALESCE(NULLIF(MAX(s.CANT_TOTAL), 0),
+                                          SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
                        END AS CANT_VIG,
-                       /* MNTO_VIG usa MNTO_TOTAL, no cantidad × MAX(precio): es el
-                          importe que el propio SIGA guardó (verificado idéntico en
-                          las 6 629 filas del ejercicio) y evita que un MAX(precio)
-                          equivocado altere el importe si el grupo tuviera precios
-                          distintos. */
+                       /* MNTO_VIG: misma corrección; es la cantidad vigente × precio. */
                        CASE WHEN SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN 1 ELSE 0 END) = 0 THEN 0
-                            ELSE SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.MNTO_TOTAL ELSE 0 END)
+                            ELSE COALESCE(NULLIF(MAX(s.CANT_TOTAL), 0),
+                                          SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('E','ET') THEN d.CANT_TOTAL ELSE 0 END))
+                                 * MAX(d.PRECIO_UNIT)
                        END AS MNTO_VIG,
                        COUNT(*) AS NRO_LINEAS,
                        SUM(CASE WHEN d.ESTADO IN ('I','IT') THEN 1 ELSE 0 END)                             AS LIN_INCL,
@@ -391,6 +375,9 @@ class CmnQuery
                        SUM(CASE WHEN d.ESTADO = 'C' THEN 1 ELSE 0 END)                                     AS LIN_APROB,
                        SUM(CASE WHEN ISNULL(d.ESTADO,'') NOT IN ('I','IT','C','E','ET') THEN 1 ELSE 0 END) AS LIN_OTRO
                 FROM   SIG_CUADRO_MODIFICADO_DET d
+                LEFT JOIN SIG_CUADRO_MODIFICADO_SALDO s
+                       ON s.SEC_EJEC=d.SEC_EJEC AND s.ANNO_EJEC=d.ANNO_EJEC
+                      AND s.SEC_CUA_MOD_SAL=d.SEC_CUA_MOD_SAL
                 WHERE  d.ANNO_PROG = :anioProg
                   AND  d.ANNO_EJEC = :anioEjec
                   AND  d.SEC_EJEC  = :secEjec
