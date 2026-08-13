@@ -122,7 +122,10 @@ class ExportService
      * Envolviendo a dos líneas el encabezado se lee completo sin ensanchar
      * las columnas de dato.
      */
-    private const WRAPHEAD = 'white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;font-size:10pt;';
+    private const WRAPHEAD = 'white-space:normal;word-break:break-word;'
+                           . 'text-align:center;vertical-align:middle;'
+                           . 'mso-vertical-align-alignment:center;'
+                           . 'line-height:1.15;font-size:10pt;';
 
     /** Color estable por código de actividad (mismo criterio que el frontend). */
     private static function actColor(string $cod): array
@@ -276,6 +279,28 @@ class ExportService
         }
         $v = (string)($r[$by] ?? '');
         return $v === '' ? '—' : $v;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════
+       PUENTES PÚBLICOS PARA ExcelExport (PhpSpreadsheet)
+       ══════════════════════════════════════════════════════════════════
+       El exportador XLSX necesita la MISMA lógica de colores, abreviaturas y
+       agrupado que este export HTML — si se duplicara, los dos archivos
+       acabarían diciendo cosas distintas. Se expone lo mínimo, sin tocar los
+       métodos originales. */
+    public static function grpKeyPublico(array $r, string $by): string { return self::grpKey($r, $by); }
+    public static function grupoLabelPublico(array $items, string $by, string $key): string { return self::grupoLabel($items, $by, $key); }
+    public static function actColorPublico(string $cod): array { return self::actColor($cod); }
+    public static function cmnAbrevPublico(string $crudo): string { return self::cmnAbrev($crudo); }
+    public static function faseEjecucionPublico(array $r): string { return self::faseEjecucion($r); }
+    public static function resumenOrdenesPublico(string $crudo): string { return self::resumenOrdenes($crudo); }
+    /** Etapa (PROGRAMADO/MODIFICADO/EJECUTADO) a la que pertenece una columna, o null. */
+    public static function colFasePublico(string $key): ?string { return self::COLFASE[$key] ?? null; }
+    /** [color fuerte, color claro] de una etapa, sin el '#'. */
+    public static function faseHexPublico(string $fase): array
+    {
+        $c = self::FASE_HEX[$fase] ?? ['#FFFFFF', '#FFFFFF'];
+        return [ltrim($c[0], '#'), ltrim($c[1], '#')];
     }
 
     /** Agrupa las filas por el campo indicado y ordena por código de bien. */
@@ -503,6 +528,24 @@ class ExportService
            número hay que actualizarlo junto con ella. */
         $filaEncabezado = 5;
 
+        /* ── Última fila de datos, para el rango del autofiltro ──
+           Hay que saberla ANTES de escribir el <head>, así que se cuenta en
+           vez de deducirla al final:
+             filaEncabezado          → los títulos de columna
+             + 1                     → el TOTAL GENERAL duplicado
+             + count($rows)          → un renglón por ítem
+             + 2 por grupo           → cabecera de bloque + Sub Total (si agrupa)
+             + 1                     → el TOTAL GENERAL del cierre
+           Si la cuenta se desviara, el filtro seguiría funcionando: Excel
+           extiende el rango a las filas contiguas con datos. */
+        $nGrupos = 0;
+        if ($agrupar) {
+            $claves = [];
+            foreach ($rows as $r) { $claves[self::grpKey($r, $by)] = true; }
+            $nGrupos = count($claves);
+        }
+        $ultimaFila = $filaEncabezado + 1 + count($rows) + ($nGrupos * 2) + 1;
+
         /* ── Congelar encabezado ──────────────────────────────────────────
            Este bloque XML (namespace "urn:schemas-microsoft-com:office:excel")
            es la forma NO-binaria de decirle a Excel "las primeras N filas se
@@ -530,7 +573,8 @@ class ExportService
              tipo "2.3.2 9.1 1" y los códigos de ítem con ceros a la izquierda). */
         echo '<style>'
            . 'td{white-space:nowrap;vertical-align:middle;mso-rotate:0}'
-           . 'th{white-space:normal;word-break:break-word;vertical-align:bottom;line-height:1.15;font-size:10pt}'
+           . 'th{white-space:normal;word-break:break-word;text-align:center;vertical-align:middle;'
+             . 'mso-vertical-align-alignment:center;line-height:1.15;font-size:10pt}'
            . 'br{mso-data-placement:same-cell}'
            . '</style>';
         echo '<!--[if gte mso 9]><xml>'
@@ -546,8 +590,31 @@ class ExportService
            . '<x:ProtectContents>False</x:ProtectContents>'
            . '<x:ProtectObjects>False</x:ProtectObjects>'
            . '<x:ProtectScenarios>False</x:ProtectScenarios>'
+           . '<x:AutoFilter x:Range="R' . $filaEncabezado . 'C1:R' . $ultimaFila . 'C' . $nCols . '"/>'
            . '</x:WorksheetOptions>'
-           . '</x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook>'
+           /* ── AUTOFILTRO ──
+              Se declara DOS VECES a propósito, porque Excel es inconsistente:
+                · <x:AutoFilter> dentro de WorksheetOptions es lo que documenta
+                  Microsoft, pero varias versiones lo ignoran en archivos HTML.
+                · El nombre definido _FilterDatabase es lo que Excel escribe
+                  internamente cuando activas el filtro a mano, y es el que
+                  realmente lo enciende al abrir.
+              Poniendo los dos funciona en todas las versiones; el que sobre
+              es inofensivo.
+              OJO al filtrar con el archivo AGRUPADO: las cabeceras de bloque y
+              los Sub Total ocupan todo el ancho con colspan y no se ocultan
+              junto con sus ítems. Para filtrar cómodo conviene exportar sin
+              agrupar (desmarcar "Agrupar" en pantalla). */
+           . '</x:ExcelWorksheet></x:ExcelWorksheets>'
+           /* _FilterDatabase: el nombre definido que Excel usa internamente
+              para el autofiltro. SheetIndex 1 = la única hoja del libro. */
+           . '<x:ExcelName>'
+           .   '<x:Name>_FilterDatabase</x:Name>'
+           .   '<x:SheetIndex>1</x:SheetIndex>'
+           .   '<x:Formula>=CMN!R' . $filaEncabezado . 'C1:R' . $ultimaFila . 'C' . $nCols . '</x:Formula>'
+           .   '<x:Hidden/>'
+           . '</x:ExcelName>'
+           . '</x:ExcelWorkbook>'
            . '</xml><![endif]-->';
         echo '</head><body>';
 
@@ -564,21 +631,31 @@ class ExportService
         }
         echo '</colgroup>';
 
-        /* ── Cabecera institucional ──
-           Las tres filas van CENTRADAS sobre el ancho completo de la tabla.
-           El colspan por sí solo no centra: Excel alinea el contenido a la
-           izquierda de la primera celda combinada, así que hace falta el
-           text-align:center explícito. Se usa mso-number-format:'@' para que
-           Excel no intente reinterpretar el texto (p.ej. la fecha de
-           "Generado" como número de serie). */
-        $hdrCenter = self::NOWRAP . 'text-align:center;mso-number-format:\'@\';';
-        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:15px;font-weight:bold;color:#14967d">'
+        /* ── Títulos de la cabecera ──
+           Calibri 10 en NEGRITA y alineado a la IZQUIERDA: formato sobrio de
+           documento oficial, coherente con el resto de la hoja (Calibri es la
+           fuente por defecto de Excel).
+           Cada línea CONSERVA su color original — verde institucional el
+           título, gris oscuro el centro, gris claro la fecha —: lo único que
+           se unificó fue la fuente, el tamaño, la negrita y la alineación.
+           Los atributos align y valign van además del CSS porque Excel ignora
+           con frecuencia el text-align en celdas combinadas por colspan. El
+           mso-number-format:'@' evita que Excel reinterprete el texto (p.ej.
+           la fecha de "Generado" como número de serie).
+           OJO: esto es SOLO la barra de títulos del documento. Los encabezados
+           de COLUMNA van centrados y con ajuste de texto, y las celdas de datos
+           tienen su propio formato; nada de eso se toca aquí. */
+        $hdrLeft   = self::NOWRAP . 'text-align:left;vertical-align:middle;'
+                   . 'mso-vertical-align-alignment:center;mso-number-format:\'@\';'
+                   . 'font-family:Calibri,sans-serif;font-size:10pt;font-weight:bold;';
+        $hdrAttr   = ' colspan="' . $nCols . '" align="left" valign="middle"';
+        echo '<tr><td' . $hdrAttr . ' style="' . $hdrLeft . 'height:22px;color:#14967d">'
            . htmlspecialchars(self::unaLinea($titulo)) . '</td></tr>';
         // El centro ya viene con el responsable del área anexado desde index.php
         // ("104.07.03.01 · OFICINA … · Resp.: BAUTISTA MELENDEZ VICTOR MANUEL").
-        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:11px;color:#334155">'
+        echo '<tr><td' . $hdrAttr . ' style="' . $hdrLeft . 'height:20px;color:#334155">'
            . htmlspecialchars(self::unaLinea($centro)) . '</td></tr>';
-        echo '<tr><td colspan="' . $nCols . '" style="' . $hdrCenter . 'font-size:9px;color:#64748b">Generado: '
+        echo '<tr><td' . $hdrAttr . ' style="' . $hdrLeft . 'height:18px;color:#64748b">Generado: '
            . date('d/m/Y H:i') . '</td></tr>';
         echo '<tr><td colspan="' . $nCols . '"></td></tr>';
 
@@ -588,13 +665,24 @@ class ExportService
         //    en amarillo/naranja/verde con texto azul, igual que en pantalla. ──
         echo '<tr>';
         foreach (self::HEADERS as $key => $label) {
-            $al     = in_array($key, self::NUM, true) ? 'right' : 'left';
             $fase   = self::COLFASE[$key] ?? null;
-            $bgH    = $fase ? self::FASE_HEX[$fase][0] : '#1abb9c';
-            $colH   = $fase ? '#1e3a8a' : '#fff';
-            $border = $fase ? $bgH : '#0f766e';
-            echo '<th style="' . self::WRAPHEAD . 'background:' . $bgH . ';color:' . $colH
-               . ';font-weight:bold;border:1px solid ' . $border . ';text-align:' . $al . '">'
+            /* DIFERENCIA lleva el MISMO amarillo que las columnas de PROGRAMADO,
+               con el mismo texto azul: se lee como parte del mismo bloque.
+               Solo la cabecera; las celdas siguen con fondo normal. */
+            $esDif  = ($key === 'DIFERENCIA');
+            $amaril = self::FASE_HEX['PROGRAMADO'][0];
+            $bgH    = $fase ? self::FASE_HEX[$fase][0] : ($esDif ? $amaril : '#1abb9c');
+            $colH   = ($fase || $esDif) ? '#1e3a8a' : '#fff';
+            $border = $fase ? $bgH     : ($esDif ? $amaril : '#0f766e');
+            /* Cabeceras SIEMPRE centradas y al medio, con ajuste de texto
+               ("Ajustar texto" + "Centrar" + "Alinear en el medio" de Excel).
+               Antes seguían la alineación del DATO ($al: derecha en las
+               numéricas), lo que dejaba los títulos descolgados a los lados.
+               Los atributos align/valign van además del CSS porque Excel
+               ignora con frecuencia el text-align de las celdas de cabecera. */
+            echo '<th align="center" valign="middle" style="' . self::WRAPHEAD
+               . 'background:' . $bgH . ';color:' . $colH
+               . ';font-weight:bold;border:1px solid ' . $border . '">'
                . htmlspecialchars(self::unaLinea($label)) . '</th>';
         }
         echo '</tr>';

@@ -40,6 +40,21 @@ require_once __DIR__ . '/config.php';
 require_once __DIR__ . '/Auth.php';
 require_once __DIR__ . '/CmnQuery.php';
 require_once __DIR__ . '/ExportService.php';
+/* PhpSpreadsheet (composer require phpoffice/phpspreadsheet:^1.29).
+   Es OPCIONAL: si el vendor no está instalado, el export cae al HTML de
+   siempre. Así el sistema nunca se queda sin exportar por una dependencia.
+
+   Se busca en DOS rutas porque composer se puede haber ejecutado desde la raíz
+   del proyecto o desde public_html:
+     · public_html/vendor/autoload.php   (composer corrido aquí mismo)
+     · ../vendor/autoload.php            (composer corrido en la raíz)
+   En esta instalación el vendor quedó en la RAÍZ (E:\SIGA-REPORTER\vendor),
+   un nivel por encima de este archivo — por eso no basta con __DIR__. */
+foreach ([__DIR__ . '/vendor/autoload.php', dirname(__DIR__) . '/vendor/autoload.php'] as $__auto) {
+    if (is_file($__auto)) { require_once $__auto; break; }
+}
+unset($__auto);
+require_once __DIR__ . '/ExcelExport.php';
 require_once __DIR__ . '/column_labels.php';
 
 /* ---- SEGURIDAD: sin sesión no se entra (protege vista, endpoints y export) ---- */
@@ -100,19 +115,38 @@ if ($export === 'excel' || $export === 'pdf') {
         $r['ESTADO_EJEC'] = ExportService::estadoEjec($r);
     }
     unset($r);
-    $nombre = 'CMN_'.$anioProg.($ccosto ? '_'.str_replace('.','',$ccosto) : '_TODOS');
     // Contexto para que el archivo salga igual que la pantalla (cabecera + bloques).
-    $ccNom = 'TODOS LOS CENTROS';
+    $ccNom     = 'TODOS LOS CENTROS';
+    $ccNomSolo = 'TODOS LOS CENTROS';   // sin código ni responsable, para el nombre del archivo
     if ($ccosto) {
         foreach ($q->centros($anioProg,$anioEjec,SEC_EJEC) as $c) {
             if ($c['cod']===$ccosto) {
-                $ccNom = $c['cod'].'  ·  '.$c['nombre'];
+                $ccNom     = $c['cod'].'  ·  '.$c['nombre'];
+                $ccNomSolo = (string)$c['nombre'];
                 // Responsable del centro (jefe formal), si lo tiene asignado.
                 if (($c['responsable'] ?? '') !== '') $ccNom .= '  ·  Resp.: '.$c['responsable'];
                 break;
             }
         }
     }
+
+    /* NOMBRE DEL ARCHIVO · CN-<año>-<código CC>_<nombre CC>_<fecha exportación>
+       Ej.: CN-2026-104080501_DIRECCION-DE-ASUNTOS-ACADEMICOS-JEFATURA_2026-08-10
+       Se limpia el nombre del centro porque Windows no admite \ / : * ? " < > |
+       en un nombre de archivo, y las tildes/eñes dan problemas al abrirlo desde
+       otro equipo o al subirlo a Drive. Va DESPUÉS de resolver $ccNomSolo: si se
+       arma antes, el nombre del centro todavía no se conoce. */
+    $slug = function (string $t): string {
+        $t = strtr($t, ['Á'=>'A','É'=>'E','Í'=>'I','Ó'=>'O','Ú'=>'U','Ü'=>'U','Ñ'=>'N',
+                        'á'=>'a','é'=>'e','í'=>'i','ó'=>'o','ú'=>'u','ü'=>'u','ñ'=>'n']);
+        $t = preg_replace('/[^A-Za-z0-9]+/', '-', $t);   // todo lo demás → guion
+        $t = preg_replace('/-{2,}/', '-', trim((string)$t, '-'));
+        return mb_substr((string)$t, 0, 60, 'UTF-8');    // nombres largos: se recorta
+    };
+    $nombre = 'CN-'.$anioProg
+            .'-'.($ccosto ? str_replace('.','',$ccosto) : 'TODOS')
+            .'_'.$slug($ccNomSolo)
+            .'_'.date('Y-m-d');
     // Campo de agrupación elegido en pantalla (groupBy). Vacío = sin agrupar.
     $gBy = (string)($_GET['groupby'] ?? '');
     $agrupaOn = ($_GET['agrupar'] ?? '1') !== '0' && $gBy !== '';
@@ -140,7 +174,15 @@ if ($export === 'excel' || $export === 'pdf') {
         }
     }
 
-    ExportService::excel($all,$nombre,$meta);
+    /* XLSX real (PhpSpreadsheet) si está disponible: trae autofiltro NATIVO y
+       FÓRMULAS vivas — DIFERENCIA, SALDO POR DEVENGAR y los totales con
+       SUBTOTAL(109), que se recalculan al filtrar. Si no está instalado, el
+       export HTML de siempre, que no depende de nada. */
+    if (ExcelExport::disponible()) {
+        ExcelExport::generar($all,$nombre,$meta);
+    } else {
+        ExportService::excel($all,$nombre,$meta);
+    }
     exit;
 }
 
@@ -1006,6 +1048,10 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
   /* Colores de la columna DIFERENCIA (definidos aquí para no depender de INK,
      que se declara más abajo). Ámbar normal, rojo si es negativa. */
   const DIF_AMBAR='#b45309', DIF_ROJO='#dc2626', DIF_CLARO='#fbbf24';
+  /* Cabecera de la columna DIFERENCIA: el MISMO amarillo que las columnas de
+     PROGRAMADO (FASE_HEX.PROGRAMADO[0]) con el mismo texto azul, para que se
+     lea como parte del mismo bloque visual. */
+  const DIF_HEAD=FASE_HEX.PROGRAMADO[0], DIF_HEAD_TXT=FASE_TXT;
   /* Fila de totales alineada bajo las columnas de importe visibles (estilo SIGA).
      s = {P,M,E,D,Dev,Saldo} con los subtotales de cada columna de monto.
      difCol = color de la DIFERENCIA (claro sobre fondos oscuros como el total página). */
@@ -1112,7 +1158,14 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
       +cols.map(k=>{
         const fh=COLFASE[k]?FASE_HEX[COLFASE[k]]:null;
         const w='width:'+colWidth(k)+'px;min-width:'+colWidth(k)+'px;max-width:'+colWidth(k)+'px;';
-        const st=' style="'+w+(fh?'background:'+fh[0]+';color:'+FASE_TXT+';':'')+'"';
+        /* DIFERENCIA lleva su propio color de cabecera (ámbar), a juego con el
+           que ya usan sus VALORES en la tabla: así se lee de un vistazo que esa
+           columna es el saldo, no otra columna de fase. Solo la cabecera — las
+           celdas mantienen fondo blanco y el ámbar/rojo en el número. */
+        const esDif = (k==='DIFERENCIA');
+        const st=' style="'+w
+                 +(fh   ? 'background:'+fh[0]+';color:'+FASE_TXT+';' : '')
+                 +(esDif? 'background:'+DIF_HEAD+';color:'+DIF_HEAD_TXT+';' : '')+'"';
         if(k==='__FASE') return '<th class="px-2 py-2"'+st+'></th>';
         if(k==='CERT_SIGA') return '<th class="px-2 py-2 font-semibold text-center"'+st+' title="Certificado presupuestalmente (equivale al check Cert del SIGA)">'+ec(HEADERS[k])+'</th>';
         return '<th class="px-2 py-2 font-semibold '+(NUM.has(k)?'text-right':'text-left')+'"'+st+'>'+ec(HEADERS[k])+'</th>';

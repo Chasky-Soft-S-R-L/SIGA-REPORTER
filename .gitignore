@@ -33,7 +33,6 @@ CMN_*.xls
 CMN_*.pdf
 
 # ── Dependencias ───────────────────────────────────────────
-/vendor/
 composer.lock
 node_modules/
 package-lock.json
