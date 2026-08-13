@@ -249,6 +249,7 @@ class ExcelExport
                 $sh->setCellValueExplicit($cel, $nro > 0 ? 'SI' : '',
                     \PhpOffice\PhpSpreadsheet\Cell\DataType::TYPE_STRING);
             } elseif ($k === 'ESTADO_EJEC') {
+                /* El COLOR de esta celda lo pone estiloFila(); aquí solo el texto. */
                 $sh->setCellValue($cel, mb_strtoupper(ExportService::estadoEjec($r), 'UTF-8'));
             } elseif ($k === 'ESTADO_CMN') {
                 $sh->setCellValue($cel, ExportService::cmnAbrevPublico((string)($r[$k] ?? '')));
@@ -266,7 +267,7 @@ class ExcelExport
             }
         }
 
-        self::estiloFila($sh, $f, $cols, $tinte, $excluido);
+        self::estiloFila($sh, $f, $cols, $tinte, $excluido, ExportService::estadoEjec($r));
     }
 
     /**
@@ -284,8 +285,17 @@ class ExcelExport
         }
     }
 
-    /** Formato de una fila de datos: tintes de fase, números y rojo si está excluida. */
-    private static function estiloFila($sh, int $f, array $cols, ?string $tinte, bool $excluido): void
+    /**
+     * Formato de una fila de datos: tintes de fase, formato numérico y los
+     * COLORES DE ESTADO, los mismos que usa el export HTML:
+     *   Ejecutado → azul   (#0000FF)  ya se compró
+     *   Pendiente → negro  (#000000)  vigente, aún sin comprar
+     *   Excluido  → rojo   (#C00000)  salió del cuadro; además TODA la fila va
+     *                                 en rojo, como indicador visual
+     * Sin esto, la columna ESTADO salía toda del mismo color y se perdía la
+     * lectura de un vistazo que sí tiene la pantalla.
+     */
+    private static function estiloFila($sh, int $f, array $cols, ?string $tinte, bool $excluido, string $estado = ''): void
     {
         foreach ($cols as $i => $k) {
             $cel  = Coordinate::stringFromColumnIndex($i + 1) . $f;
@@ -309,6 +319,21 @@ class ExcelExport
             }
             if ($k === 'CERT_SIGA' || $k === 'ESTADO_EJEC') {
                 $sh->getStyle($cel)->getAlignment()->setHorizontal(Alignment::HORIZONTAL_CENTER);
+            }
+            /* Colores propios de la columna ESTADO (van DESPUÉS del estilo
+               general para que ganen sobre el rojo de fila excluida, que ahí
+               coincide de todos modos). */
+            if ($k === 'ESTADO_EJEC') {
+                $cEst = ($estado === 'Ejecutado') ? '0000FF'
+                      : (($estado === 'Excluido') ? 'C00000' : '000000');
+                $sh->getStyle($cel)->applyFromArray([
+                    'font' => ['bold' => true, 'size' => 10, 'color' => ['rgb' => $cEst]],
+                ]);
+            }
+            /* CERT: verde el "SI", para que se distinga de las celdas vacías. */
+            if ($k === 'CERT_SIGA') {
+                $sh->getStyle($cel)->getFont()->setBold(true)
+                   ->getColor()->setRGB($excluido ? 'C00000' : '059669');
             }
         }
     }
