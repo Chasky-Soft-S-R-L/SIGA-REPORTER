@@ -28,6 +28,11 @@
  * los centros es la operación más costosa). Se muestra un estado inicial y los
  * datos llegan al elegir un centro o al pulsar "Cargar todos los centros".
  *
+ * EXPORTACIÓN A EXCEL: el botón se descarga por fetch → blob (no por navegación
+ * directa del <a>), para poder BLOQUEAR el botón mientras dura, mostrar una
+ * barra de progreso y saber con certeza cuándo terminó. Ver el bloque
+ * "Exportar a Excel" al final del script de datos.
+ *
  * CONFIGURACIÓN: servidor, base, SEC_EJEC y año por defecto salen del .env a
  * través de config.php. No hay credenciales escritas en este archivo.
  * Usa los partials compartidos: head · sidebar · header · accesos (Ctrl+K).
@@ -467,6 +472,20 @@ include __DIR__ . '/partials/head.php';
   </div>
 </div></div>
 
+<!-- Progreso de exportación a Excel · bloquea el botón hasta que el archivo esté listo.
+     Con Content-Length el avance es real (bytes recibidos); sin él, aproximado. -->
+<div id="xpOv"><div class="xpCard">
+  <div class="xpTop">
+    <div class="xpIcon"><i class="fa-solid fa-file-excel"></i></div>
+    <div class="min-w-0">
+      <p class="xpTitle">Generando Excel</p>
+      <p id="xpMsg" class="xpMsg">Preparando…</p>
+    </div>
+    <span id="xpPct" class="xpPct">0%</span>
+  </div>
+  <div class="xpTrack"><div id="xpBar" class="xpFill"></div></div>
+</div></div>
+
 <!-- Modal de trazabilidad · Expediente formal -->
 <div id="histModal" class="hidden fixed inset-0 z-50">
   <div id="histBack" class="absolute inset-0" style="background:rgba(6,32,26,.55);backdrop-filter:blur(2px)"></div>
@@ -590,6 +609,40 @@ include __DIR__ . '/partials/head.php';
   @keyframes beat{0%,100%{transform:scale(1);opacity:.85}50%{transform:scale(1.12);opacity:1}}
   .loadDots::after{content:'';animation:dots 1.4s steps(4,end) infinite}
   @keyframes dots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}}
+
+  /* ── Progreso de exportación a Excel ──────────
+     Mismo lenguaje visual que el loader del SIGA (tarjeta blanca sobre velo),
+     pero en esmeralda de hoja de cálculo y con barra determinada: mientras esto
+     está arriba, el botón Excel queda bloqueado. */
+  #xpOv{position:fixed;inset:0;z-index:70;display:none;place-items:center;
+    background:rgba(6,32,26,.42);backdrop-filter:blur(4px);-webkit-backdrop-filter:blur(4px)}
+  #xpOv.on{display:grid;animation:fadeIn .18s ease}
+  .xpCard{width:min(90vw,420px);background:#fff;border-radius:16px;padding:18px 20px;
+    box-shadow:0 24px 64px -16px rgba(6,78,59,.45),0 0 0 1px rgba(6,78,59,.06);
+    animation:rise .25s cubic-bezier(.2,.8,.2,1)}
+  .xpTop{display:flex;align-items:center;gap:14px}
+  .xpIcon{width:42px;height:42px;border-radius:12px;display:grid;place-items:center;flex-shrink:0;
+    color:#fff;font-size:20px;background:linear-gradient(135deg,#047857,#10b981)}
+  .xpTitle{font-size:14px;font-weight:800;color:#0f172a;line-height:1.1}
+  .xpMsg{font-size:11.5px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .xpMsg.err{color:#dc2626;font-weight:600}
+  .xpPct{margin-left:auto;font-size:16px;font-weight:800;color:#059669;font-variant-numeric:tabular-nums}
+  .xpTrack{height:9px;border-radius:99px;background:#e6f4ee;overflow:hidden;margin-top:14px}
+  .xpFill{position:relative;overflow:hidden;height:100%;border-radius:99px;width:0;
+    background:linear-gradient(90deg,#047857,#10b981,#34d399);background-size:200% 100%;
+    transition:width .28s cubic-bezier(.4,0,.2,1);animation:xpFlow 1.4s linear infinite}
+  @keyframes xpFlow{to{background-position:-200% 0}}
+  .xpFill::after{content:'';position:absolute;inset:0;
+    background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);
+    transform:translateX(-100%);animation:xpShine 1.15s ease-in-out infinite}
+  @keyframes xpShine{to{transform:translateX(100%)}}
+  /* Botón Excel bloqueado mientras dura la descarga. */
+  #expExcel.expBusy{opacity:.6;pointer-events:none;cursor:wait}
+  @media (prefers-reduced-motion:reduce){
+    .xpFill,.xpFill::after{animation:none}
+    .xpCard{animation:none}
+  }
+
   /* esqueleto de tabla */
   .skl{background:linear-gradient(90deg,#eef2f7 25%,#f8fafc 37%,#eef2f7 63%);background-size:400% 100%;
     animation:shim 1.3s ease infinite;border-radius:4px;height:9px}
@@ -953,6 +1006,86 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
     $('expExcel').href='?'+params(Object.assign({export:'excel'},cx)).toString();
     $('expPdf').href  ='?'+params(Object.assign({export:'pdf'  },cx)).toString();
   }
+
+  /* ═══════════ EXPORTAR A EXCEL · botón bloqueado + progreso ═══════════
+     El <a id="expExcel"> conserva su href real (si el JS fallara, sigue
+     descargando como antes), pero el clic se intercepta: la descarga va por
+     fetch → blob para poder (1) IGNORAR clics repetidos mientras dura,
+     (2) mostrar avance y (3) saber con certeza cuándo terminó para volver a
+     habilitar el botón.
+
+     Progreso: si la respuesta trae Content-Length, el avance es REAL byte a
+     byte. El XLSX de PhpSpreadsheet suele salir sin ese header (se arma en
+     memoria y se manda en chunks), así que ahí la barra avanza de forma
+     aproximada — se acerca asintóticamente a un techo y salta a 100% cuando el
+     archivo llega. Nunca retrocede ni se queda clavada en 99% si algo falla:
+     el catch cierra el diálogo y libera el botón. */
+  const expBtn=$('expExcel');
+  const xpOv=$('xpOv'),xpBar=$('xpBar'),xpMsg=$('xpMsg'),xpPctEl=$('xpPct');
+  let exportando=false, xpVal=0, xpTimer=null;
+  const xpPaint=()=>{const v=Math.max(0,Math.min(100,xpVal));xpBar.style.width=v+'%';xpPctEl.textContent=Math.round(v)+'%';};
+  const xpText=(t,err)=>{xpMsg.textContent=t;xpMsg.classList.toggle('err',!!err);};
+  const xpOpen=()=>{xpVal=0;xpPaint();xpText('Preparando…');xpOv.classList.add('on');};
+  const xpClose=()=>xpOv.classList.remove('on');
+  const fmtBytes=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(0)+' KB':(n/1048576).toFixed(1)+' MB';
+  /* Avance aproximado: se acerca al techo cada vez más lento, así nunca lo
+     rebasa ni promete un 100% que todavía no ocurrió. */
+  function xpCrawl(techo){
+    clearInterval(xpTimer);
+    xpTimer=setInterval(()=>{ if(xpVal<techo){ xpVal+=Math.max(.35,(techo-xpVal)*.05); xpPaint(); } },120);
+  }
+  function expBusy(b){
+    expBtn.classList.toggle('expBusy',b);
+    if(b) expBtn.setAttribute('aria-busy','1'); else expBtn.removeAttribute('aria-busy');
+  }
+
+  async function descargarExcel(url){
+    if(exportando) return;                       // ya hay una descarga en curso: se ignora el clic
+    exportando=true; expBusy(true); xpOpen();
+    xpText('Preparando el archivo en el servidor…'); xpCrawl(40);  // armar el XLSX es lo más lento
+    try{
+      const r=await fetch(url,{credentials:'same-origin'});
+      /* Sesión vencida: Auth redirige al login y llegaría HTML en vez del XLSX. */
+      if(r.redirected && /login/i.test(r.url)){ location.href='login.php?next=index.php'; return; }
+      if(!r.ok) throw new Error('HTTP '+r.status);
+
+      // Nombre del archivo: lo fija el servidor en Content-Disposition.
+      const cd=r.headers.get('content-disposition')||'';
+      let fname='cuadro-necesidades.xlsx';
+      const m=/filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(cd);
+      if(m){ try{ fname=decodeURIComponent(m[1].replace(/"/g,'')); }catch(_){ fname=m[1].replace(/"/g,''); } }
+
+      const total=+(r.headers.get('content-length')||0);
+      let blob;
+      if(total>0 && r.body && r.body.getReader){          // progreso REAL, byte a byte
+        clearInterval(xpTimer);
+        const rd=r.body.getReader(), trozos=[]; let rec=0;
+        while(true){
+          const {done,value}=await rd.read(); if(done) break;
+          trozos.push(value); rec+=value.length;
+          xpVal=40+(rec/total)*58; xpPaint();
+          xpText('Descargando… '+fmtBytes(rec)+' de '+fmtBytes(total));
+        }
+        blob=new Blob(trozos);
+      }else{                                              // sin Content-Length: aproximado
+        xpText('Generando la hoja de cálculo…'); xpCrawl(92);
+        blob=await r.blob();
+      }
+
+      clearInterval(xpTimer); xpVal=100; xpPaint(); xpText('Listo. Iniciando la descarga…');
+      const a=document.createElement('a'), href=URL.createObjectURL(blob);
+      a.href=href; a.download=fname; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(href),4000);
+      setTimeout(xpClose,650);
+    }catch(e){
+      clearInterval(xpTimer);
+      xpText('No se pudo generar el Excel. Vuelve a intentarlo.',true);
+      setTimeout(xpClose,2200);
+    }finally{
+      exportando=false; expBusy(false);
+    }
+  }
+  expBtn.addEventListener('click',e=>{ e.preventDefault(); updateExport(); descargarExcel(expBtn.href); });
 
   /* Detalle de órdenes (trazabilidad SIGA): conserva las fases nativas de cada
      O/C u O/S y separa los DOS correlativos de la certificación.
@@ -1994,6 +2127,8 @@ if(window.SIGA&&SIGA.accion)SIGA.accion('Buscar centro de costo','fa-building',(
      accesos.php se incluye antes de este script, así que SIGA.accion existe. */
   if(window.SIGA&&SIGA.accion){
     SIGA.accion('Cargar todos los centros','fa-layer-group',()=>load(),'Consulta el CMN completo de la entidad');
+    /* Excel: pasa por el mismo listener del botón, así que también queda
+       bloqueado mientras dura la descarga (no se puede disparar dos veces). */
     SIGA.accion('Exportar a Excel','fa-file-excel',()=>{updateExport();$('expExcel').click();},'Descarga el CMN con los filtros y campos actuales');
     SIGA.accion('Exportar a PDF','fa-file-pdf',()=>{updateExport();window.open($('expPdf').href,'_blank');},'Abre el PDF con los filtros y campos actuales');
     SIGA.accion('Pantalla completa','fa-expand',()=>toggleFs(true),'Tabla a pantalla completa (Esc para salir)');
