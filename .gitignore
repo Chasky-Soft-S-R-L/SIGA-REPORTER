@@ -10,6 +10,7 @@
 *.local.php
 config.local.php
 data/
+public_html/data/
 # ── Logs ───────────────────────────────────────────────────
 logs/
 *.log
